@@ -1,21 +1,44 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
-import type { Geometry, Polygon, ViewState } from '@/types'
-import { GeometryType, generateId, getNextColor } from '@/types'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import type { Geometry, Polygon, ViewState, Point } from '@/types'
+import { generateId, getNextColor } from '@/types'
 import { 
   clearCanvas, 
   drawGrid, 
-  drawGeometry 
+  drawGeometry,
+  detectHover
 } from '@/utils/canvasRenderer'
 import { generateNonOverlappingPolygon } from '@/utils/geometryGenerator'
-import InputPanel from '@/components/InputPanel.vue'
+import DraggablePanel from '@/components/DraggablePanel.vue'
 import GeometryList from '@/components/GeometryList.vue'
 
 // 状态
 const geometries = ref<Geometry[]>([])
 const selectedId = ref<string | null>(null)
+const hoveredId = ref<string | null>(null)
 const errorMsg = ref('')
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+
+// 鼠标位置
+const mousePos = ref({ x: 0, y: 0 })
+const hoveredVertex = ref<{ geometryId: string; vertexIndex: number; point: Point } | null>(null)
+
+// 最后经过的顶点（保持高亮）
+const lastHoveredVertex = ref<{ geometryId: string; vertexIndex: number; point: Point } | null>(null)
+
+// 计算鼠标在世界坐标系中的位置
+const mouseWorldPos = computed(() => {
+  const canvas = canvasRef.value
+  if (!canvas) return { x: 0, y: 0 }
+  
+  const centerX = canvas.width / 2
+  const centerY = canvas.height / 2
+  
+  return {
+    x: (mousePos.value.x - centerX - viewState.value.offsetX) / viewState.value.scale,
+    y: (mousePos.value.y - centerY - viewState.value.offsetY) / viewState.value.scale
+  }
+})
 
 // 视图状态
 const viewState = ref<ViewState>({
@@ -31,6 +54,15 @@ const lastMousePos = ref({ x: 0, y: 0 })
 // 重命名状态
 const editingNameId = ref<string | null>(null)
 const editingName = ref('')
+
+// 面板折叠状态
+const isListCollapsed = ref(false)
+
+// 输入面板位置
+const inputPanelPos = ref({ x: 20, y: 20 })
+
+// 图形列表位置
+const listPanelPos = ref({ x: 380, y: 20 })
 
 // 绘制所有图形
 const drawAll = () => {
@@ -49,16 +81,88 @@ const drawAll = () => {
   // 绘制所有可见图形
   geometries.value.forEach(geometry => {
     if (geometry.visible) {
-      drawGeometry(
-        ctx, 
-        geometry, 
-        viewState.value, 
-        canvas.width, 
-        canvas.height, 
-        selectedId.value === geometry.id
-      )
+      const isHovered = hoveredId.value === geometry.id
+      const isSelected = selectedId.value === geometry.id
+      // 传递当前悬停顶点或最后经过的顶点
+      const activeVertex = hoveredVertex.value || lastHoveredVertex.value
+      drawGeometry(ctx, geometry, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex)
     }
   })
+}
+
+// 处理鼠标移动
+const handleMouseMove = (e: MouseEvent) => {
+  const canvas = canvasRef.value
+  if (!canvas) return
+
+  // 获取鼠标在画布上的位置
+  const rect = canvas.getBoundingClientRect()
+  mousePos.value = {
+    x: e.clientX - rect.left,
+    y: e.clientY - rect.top
+  }
+
+  // 检测悬停
+  const result = detectHover(
+    mousePos.value.x,
+    mousePos.value.y,
+    geometries.value,
+    viewState.value,
+    canvas.width,
+    canvas.height
+  )
+
+  // 更新悬停状态
+  if (result.hoveredGeometryId !== hoveredId.value) {
+    hoveredId.value = result.hoveredGeometryId
+    drawAll()
+  }
+
+  // 更新当前悬停顶点
+  hoveredVertex.value = result.hoveredVertex
+  
+  // 如果有新的悬停顶点，更新最后经过的顶点
+  if (result.hoveredVertex) {
+    lastHoveredVertex.value = result.hoveredVertex
+    drawAll()
+  }
+
+  // 处理拖拽
+  if (isDragging.value) {
+    const deltaX = e.clientX - lastMousePos.value.x
+    const deltaY = e.clientY - lastMousePos.value.y
+
+    viewState.value.offsetX += deltaX
+    viewState.value.offsetY += deltaY
+
+    lastMousePos.value = { x: e.clientX, y: e.clientY }
+
+    drawAll()
+  }
+}
+
+// 处理鼠标按下
+const handleMouseDown = (e: MouseEvent) => {
+  if (e.button === 0) {
+    // 如果点击在顶点上，不启动拖拽
+    if (hoveredVertex.value) {
+      return
+    }
+    
+    isDragging.value = true
+    lastMousePos.value = { x: e.clientX, y: e.clientY }
+    
+    // 点击时选中多边形
+    if (hoveredId.value) {
+      selectedId.value = hoveredId.value
+      drawAll()
+    }
+  }
+}
+
+// 处理鼠标释放
+const handleMouseUp = () => {
+  isDragging.value = false
 }
 
 // 添加图形
@@ -81,9 +185,8 @@ const addGeometry = (partialGeometry: Omit<Geometry, 'id' | 'name' | 'color'>) =
 const generateRandomTestPolygon = () => {
   errorMsg.value = ''
 
-  // 获取现有的多边形
   const existingPolygons = geometries.value.filter(
-    g => g.type === GeometryType.POLYGON
+    g => g.type === 'polygon'
   ) as Polygon[]
 
   const newPolygon = generateNonOverlappingPolygon(existingPolygons)
@@ -102,6 +205,9 @@ const deleteGeometry = (id: string) => {
     geometries.value.splice(index, 1)
     if (selectedId.value === id) {
       selectedId.value = null
+    }
+    if (hoveredId.value === id) {
+      hoveredId.value = null
     }
     drawAll()
   }
@@ -154,6 +260,8 @@ const clearAll = () => {
   if (confirm('确定要清空所有图形吗？')) {
     geometries.value = []
     selectedId.value = null
+    hoveredId.value = null
+    hoveredVertex.value = null
     drawAll()
   }
 }
@@ -186,32 +294,48 @@ const handleWheel = (e: WheelEvent) => {
   drawAll()
 }
 
-// 鼠标按下
-const handleMouseDown = (e: MouseEvent) => {
-  if (e.button === 0) {
-    isDragging.value = true
-    lastMousePos.value = { x: e.clientX, y: e.clientY }
+// 面板拖拽相关
+const isPanelDragging = ref(false)
+const panelDragOffset = ref({ x: 0, y: 0 })
+const draggedPanel = ref<'input' | 'list' | null>(null)
+
+// 开始面板拖拽
+const startPanelDrag = (e: MouseEvent, panel: 'input' | 'list') => {
+  isPanelDragging.value = true
+  draggedPanel.value = panel
+  panelDragOffset.value = {
+    x: e.clientX - (panel === 'input' ? inputPanelPos.value.x : listPanelPos.value.x),
+    y: e.clientY - (panel === 'input' ? inputPanelPos.value.y : listPanelPos.value.y)
   }
 }
 
-// 鼠标移动
-const handleMouseMove = (e: MouseEvent) => {
-  if (!isDragging.value) return
-
-  const deltaX = e.clientX - lastMousePos.value.x
-  const deltaY = e.clientY - lastMousePos.value.y
-
-  viewState.value.offsetX += deltaX
-  viewState.value.offsetY += deltaY
-
-  lastMousePos.value = { x: e.clientX, y: e.clientY }
-
-  drawAll()
+// 处理面板拖拽
+const handlePanelDrag = (e: MouseEvent) => {
+  if (!isPanelDragging.value || !draggedPanel.value) return
+  
+  const newX = e.clientX - panelDragOffset.value.x
+  const newY = e.clientY - panelDragOffset.value.y
+  
+  // 限制在视口内
+  const maxX = window.innerWidth - 100
+  const maxY = window.innerHeight - 50
+  
+  const pos = {
+    x: Math.max(0, Math.min(newX, maxX)),
+    y: Math.max(0, Math.min(newY, maxY))
+  }
+  
+  if (draggedPanel.value === 'input') {
+    inputPanelPos.value = pos
+  } else {
+    listPanelPos.value = pos
+  }
 }
 
-// 鼠标释放
-const handleMouseUp = () => {
-  isDragging.value = false
+// 结束面板拖拽
+const endPanelDrag = () => {
+  isPanelDragging.value = false
+  draggedPanel.value = null
 }
 
 onMounted(() => {
@@ -221,59 +345,126 @@ onMounted(() => {
   const canvas = canvasRef.value
   if (canvas) {
     canvas.addEventListener('wheel', handleWheel, { passive: false })
+    canvas.addEventListener('mousemove', handleMouseMove)
     canvas.addEventListener('mousedown', handleMouseDown)
-    window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
   }
+  
+  // 全局拖拽监听
+  window.addEventListener('mousemove', handlePanelDrag)
+  window.addEventListener('mouseup', endPanelDrag)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', resizeCanvas)
-  window.removeEventListener('mousemove', handleMouseMove)
   window.removeEventListener('mouseup', handleMouseUp)
+  window.removeEventListener('mousemove', handlePanelDrag)
+  window.removeEventListener('mouseup', endPanelDrag)
 })
 </script>
 
 <template>
   <div class="container">
-    <!-- 输入面板 -->
-    <InputPanel
-      :geometries-count="geometries.length"
-      :view-scale="viewState.scale"
-      @add="addGeometry"
-      @error="errorMsg = $event"
-      @clear="clearError"
-      @reset-view="resetView"
-      @clear-all="clearAll"
-      @generate-random="generateRandomTestPolygon"
-    />
-
-    <!-- 图形列表 -->
-    <div class="list-container">
-      <GeometryList
-        :geometries="geometries"
-        :selected-id="selectedId"
-        @select="selectGeometry"
-        @toggle-visibility="toggleVisibility"
-        @start-rename="startRename"
-        @delete="deleteGeometry"
-      />
-
-      <!-- 重命名输入框 -->
-      <div v-if="editingNameId" class="rename-overlay" @click="cancelRename">
-        <div class="rename-modal" @click.stop>
-          <h4>重命名</h4>
-          <input
-            v-model="editingName"
-            @keyup.enter="confirmRename"
-            @keyup.esc="cancelRename"
-            placeholder="输入新名称"
-            autofocus
-          />
-          <div class="rename-actions">
-            <button class="btn-primary" @click="confirmRename">确定</button>
-            <button class="btn-secondary" @click="cancelRename">取消</button>
+    <!-- 可拖拽输入面板 -->
+    <DraggablePanel
+      v-model:position="inputPanelPos"
+      title="Polygon Studio"
+      class="input-panel"
+    >
+      <template #default>
+        <div class="input-section">
+          <label class="input-label">
+            <span class="label-icon">📐</span>
+            输入点集 (JSON)
+          </label>
+          <textarea
+            v-model="errorMsg"
+            placeholder='[{"x": 100, "y": 100}, {"x": 200, "y": 100}, {"x": 150, "y": 200}]'
+            rows="6"
+            class="glass-input"
+            readonly
+          ></textarea>
+          <p v-if="errorMsg" class="error-msg">
+            <span class="error-icon">⚠</span>
+            {{ errorMsg }}
+          </p>
+          <div class="input-actions">
+            <button class="btn-glow btn-primary" @click="addGeometry">
+              <span class="btn-icon">+</span>
+              添加多边形
+            </button>
+            <button class="btn-glass" @click="clearError">
+              清空
+            </button>
+            <button class="btn-test" @click="generateRandomTestPolygon" title="生成随机测试多边形">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+                <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
+                <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
+              </svg>
+              测试
+            </button>
           </div>
+        </div>
+        
+        <div class="panel-footer" v-if="geometries.length > 0">
+          <button class="btn-glass" @click="resetView">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
+              <path d="M3 3v5h5"></path>
+            </svg>
+            重置视图
+          </button>
+          <button class="btn-danger" @click="clearAll">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+            清空
+          </button>
+        </div>
+        
+        <div class="zoom-indicator" v-if="geometries.length > 0">
+          <span class="zoom-value">{{ (viewState.scale * 100).toFixed(0) }}%</span>
+        </div>
+      </template>
+    </DraggablePanel>
+
+    <!-- 可拖拽图形列表 -->
+    <DraggablePanel
+      v-model:position="listPanelPos"
+      title="图形列表"
+      :badge="geometries.length"
+      :collapsed="isListCollapsed"
+      @update:collapsed="isListCollapsed = $event"
+      class="list-panel"
+    >
+      <template #default>
+        <GeometryList
+          :geometries="geometries"
+          :selected-id="selectedId"
+          @select="selectGeometry"
+          @toggle-visibility="toggleVisibility"
+          @start-rename="startRename"
+          @delete="deleteGeometry"
+        />
+      </template>
+    </DraggablePanel>
+
+    <!-- 重命名弹窗 -->
+    <div v-if="editingNameId" class="rename-overlay" @click="cancelRename">
+      <div class="rename-modal" @click.stop>
+        <h4>重命名</h4>
+        <input
+          v-model="editingName"
+          @keyup.enter="confirmRename"
+          @keyup.esc="cancelRename"
+          placeholder="输入新名称"
+          autofocus
+        />
+        <div class="rename-actions">
+          <button class="btn-primary" @click="confirmRename">确定</button>
+          <button class="btn-secondary" @click="cancelRename">取消</button>
         </div>
       </div>
     </div>
@@ -285,6 +476,35 @@ onUnmounted(() => {
       :class="{ dragging: isDragging }"
     />
 
+    <!-- 右上角坐标提示 - 鼠标位置（一直显示） -->
+    <div class="coordinate-tooltip mouse-tooltip">
+      <div class="tooltip-content">
+        <span class="tooltip-label">鼠标位置</span>
+        <span class="tooltip-coords">
+          X: {{ mouseWorldPos.x.toFixed(2) }}
+        </span>
+        <span class="tooltip-coords">
+          Y: {{ mouseWorldPos.y.toFixed(2) }}
+        </span>
+      </div>
+    </div>
+
+    <!-- 顶点坐标提示（显示最后经过的顶点） -->
+    <div v-if="lastHoveredVertex" class="coordinate-tooltip vertex-tooltip">
+      <div class="tooltip-content">
+        <span class="tooltip-label vertex-active">
+          顶点 {{ lastHoveredVertex.vertexIndex + 1 }}
+          <span v-if="hoveredVertex && hoveredVertex.geometryId === lastHoveredVertex.geometryId && hoveredVertex.vertexIndex === lastHoveredVertex.vertexIndex" class="active-indicator">●</span>
+        </span>
+        <span class="tooltip-coords">
+          X: {{ lastHoveredVertex.point.x.toFixed(2) }}
+        </span>
+        <span class="tooltip-coords">
+          Y: {{ lastHoveredVertex.point.y.toFixed(2) }}
+        </span>
+      </div>
+    </div>
+
     <!-- 操作提示 -->
     <div class="floating-hint">
       <div class="hint-content">
@@ -293,6 +513,9 @@ onUnmounted(() => {
         <span class="divider">|</span>
         <span class="key">拖拽</span>
         <span>移动</span>
+        <span class="divider">|</span>
+        <span class="key">悬停</span>
+        <span>高亮</span>
       </div>
     </div>
   </div>
@@ -318,36 +541,193 @@ onUnmounted(() => {
   background: #000;
 }
 
-.list-container {
-  position: absolute;
-  top: 20px;
-  left: 380px;
-  z-index: 100;
+.input-panel {
+  width: 340px;
+}
+
+.list-panel {
   width: 320px;
-  max-height: calc(100vh - 40px);
-  background: rgba(20, 20, 30, 0.75);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  padding: 20px;
-  overflow-y: auto;
-  box-shadow:
-    0 25px 50px -12px rgba(0, 0, 0, 0.5),
-    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
 }
 
-.list-container::-webkit-scrollbar {
-  width: 6px;
+.input-section {
+  margin-bottom: 20px;
 }
 
-.list-container::-webkit-scrollbar-track {
-  background: transparent;
+.input-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
-.list-container::-webkit-scrollbar-thumb {
+.label-icon {
+  font-size: 14px;
+}
+
+.glass-input {
+  width: 100%;
+  padding: 14px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: #00f5ff;
+  resize: vertical;
+  transition: all 0.3s ease;
+  line-height: 1.6;
+}
+
+.glass-input::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.glass-input:focus {
+  outline: none;
+  border-color: rgba(0, 245, 255, 0.5);
+  background: rgba(0, 0, 0, 0.4);
+  box-shadow: 0 0 0 3px rgba(0, 245, 255, 0.1);
+}
+
+.error-msg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0 0;
+  font-size: 12px;
+  color: #ff6b6b;
+}
+
+.error-icon {
+  font-size: 14px;
+}
+
+.input-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.btn-glow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.btn-primary {
+  flex: 1;
+  background: linear-gradient(135deg, #00f5ff 0%, #00c8ff 100%);
+  color: #000;
+  box-shadow: 0 4px 20px rgba(0, 245, 255, 0.3);
+}
+
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(0, 245, 255, 0.4);
+}
+
+.btn-glass {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 18px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-glass:hover {
   background: rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-test {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 14px;
+  background: rgba(255, 0, 255, 0.1);
+  border: 1px solid rgba(255, 0, 255, 0.3);
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #ff00ff;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-test:hover {
+  background: rgba(255, 0, 255, 0.2);
+  border-color: rgba(255, 0, 255, 0.5);
+  box-shadow: 0 0 20px rgba(255, 0, 255, 0.3);
+}
+
+.btn-danger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #ff6b6b;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-danger:hover {
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.5);
+}
+
+.panel-footer {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.zoom-indicator {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.zoom-value {
+  display: inline-block;
+  padding: 6px 16px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #00f5ff;
+  font-family: 'JetBrains Mono', monospace;
 }
 
 .rename-overlay {
@@ -398,37 +778,93 @@ onUnmounted(() => {
   gap: 10px;
 }
 
-.btn-primary {
-  flex: 1;
-  padding: 10px;
-  background: linear-gradient(135deg, #00f5ff 0%, #00c8ff 100%);
-  border: none;
-  border-radius: 8px;
-  color: #000;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.btn-secondary {
-  flex: 1;
-  padding: 10px;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  color: #fff;
-  cursor: pointer;
-}
-
 .dark-canvas {
   display: block;
   width: 100vw;
   height: 100vh;
   background: #000;
-  cursor: grab;
+  cursor: crosshair;
 }
 
 .dark-canvas.dragging {
   cursor: grabbing;
+}
+
+/* 右上角坐标提示 */
+.coordinate-tooltip {
+  position: absolute;
+  right: 24px;
+  z-index: 50;
+}
+
+.mouse-tooltip {
+  top: 24px;
+}
+
+.vertex-tooltip {
+  top: 130px;
+}
+
+.tooltip-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  background: rgba(20, 20, 30, 0.9);
+  backdrop-filter: blur(10px);
+  border-radius: 10px;
+  transition: all 0.3s ease;
+  min-width: 140px;
+}
+
+.mouse-tooltip .tooltip-content {
+  border: 1px solid rgba(0, 245, 255, 0.3);
+  box-shadow: 0 0 20px rgba(0, 245, 255, 0.1);
+}
+
+.vertex-tooltip .tooltip-content {
+  border: 1px solid rgba(255, 255, 0, 0.5);
+  box-shadow: 0 0 30px rgba(255, 255, 0, 0.3);
+}
+
+.tooltip-label {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  transition: color 0.3s ease;
+}
+
+.tooltip-label.vertex-active {
+  color: #ffff00;
+  font-weight: 600;
+}
+
+.tooltip-coords {
+  font-size: 14px;
+  font-weight: 600;
+  font-family: 'JetBrains Mono', monospace;
+  transition: color 0.3s ease;
+}
+
+.mouse-tooltip .tooltip-coords {
+  color: #00f5ff;
+}
+
+.vertex-tooltip .tooltip-coords {
+  color: #ffff00;
+}
+
+.active-indicator {
+  color: #00ff00;
+  font-size: 10px;
+  margin-left: 6px;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 .floating-hint {
