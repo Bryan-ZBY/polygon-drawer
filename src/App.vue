@@ -1,31 +1,24 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
+import type { Geometry, Polygon, ViewState } from '@/types'
+import { GeometryType, generateId, getNextColor } from '@/types'
+import { 
+  clearCanvas, 
+  drawGrid, 
+  drawGeometry 
+} from '@/utils/canvasRenderer'
+import { generateNonOverlappingPolygon } from '@/utils/geometryGenerator'
+import InputPanel from '@/components/InputPanel.vue'
+import GeometryList from '@/components/GeometryList.vue'
 
-interface Point {
-  x: number
-  y: number
-}
-
-interface Polygon {
-  id: string
-  name: string
-  points: Point[]
-  color: string
-  visible: boolean
-}
-
-const inputText = ref<string>('')
+// 状态
+const geometries = ref<Geometry[]>([])
+const selectedId = ref<string | null>(null)
+const errorMsg = ref('')
 const canvasRef = ref<HTMLCanvasElement | null>(null)
-const errorMsg = ref<string>('')
-
-// 多边形列表
-const polygons = ref<Polygon[]>([])
-const selectedPolygonId = ref<string | null>(null)
-const editingNameId = ref<string | null>(null)
-const editingName = ref('')
 
 // 视图状态
-const viewState = ref({
+const viewState = ref<ViewState>({
   scale: 1,
   offsetX: 0,
   offsetY: 0
@@ -35,27 +28,12 @@ const viewState = ref({
 const isDragging = ref(false)
 const lastMousePos = ref({ x: 0, y: 0 })
 
-// 颜色列表
-const colors = [
-  '#409EFF', '#67C23A', '#E6A23C', '#F56C6C', 
-  '#909399', '#8E44AD', '#1ABC9C', '#3498DB',
-  '#E74C3C', '#F39C12', '#2ECC71', '#9B59B6'
-]
+// 重命名状态
+const editingNameId = ref<string | null>(null)
+const editingName = ref('')
 
-let colorIndex = 0
-
-// 生成唯一ID
-const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2)
-
-// 获取下一个颜色
-const getNextColor = () => {
-  const color = colors[colorIndex % colors.length]
-  colorIndex++
-  return color
-}
-
-// 绘制所有多边形
-const drawAllPolygons = () => {
+// 绘制所有图形
+const drawAll = () => {
   const canvas = canvasRef.value
   if (!canvas) return
 
@@ -63,193 +41,96 @@ const drawAllPolygons = () => {
   if (!ctx) return
 
   // 清空画布
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  clearCanvas(ctx, canvas.width, canvas.height)
 
-  // 绘制网格背景
-  drawGrid(ctx, canvas.width, canvas.height)
+  // 绘制网格
+  drawGrid(ctx, canvas.width, canvas.height, viewState.value)
 
-  // 绘制所有可见的多边形
-  polygons.value.forEach(polygon => {
-    if (polygon.visible) {
-      drawSinglePolygon(ctx, polygon)
+  // 绘制所有可见图形
+  geometries.value.forEach(geometry => {
+    if (geometry.visible) {
+      drawGeometry(
+        ctx, 
+        geometry, 
+        viewState.value, 
+        canvas.width, 
+        canvas.height, 
+        selectedId.value === geometry.id
+      )
     }
   })
 }
 
-// 绘制单个多边形
-const drawSinglePolygon = (ctx: CanvasRenderingContext2D, polygon: Polygon) => {
-  const points = polygon.points
-  if (points.length < 3) return
-
-  // 计算边界框
-  let minX = Infinity, maxX = -Infinity
-  let minY = Infinity, maxY = -Infinity
-  points.forEach(p => {
-    minX = Math.min(minX, p.x)
-    maxX = Math.max(maxX, p.x)
-    minY = Math.min(minY, p.y)
-    maxY = Math.max(maxY, p.y)
-  })
-
-  const width = maxX - minX
-  const height = maxY - minY
-
-  // 计算基础缩放比例
-  const canvas = canvasRef.value!
-  const padding = 50
-  const baseScaleX = (canvas.width - padding * 2) / (width || 1)
-  const baseScaleY = (canvas.height - padding * 2) / (height || 1)
-  const baseScale = Math.min(baseScaleX, baseScaleY)
-
-  // 计算居中偏移
-  const centerOffsetX = (canvas.width - width * baseScale) / 2 - minX * baseScale
-  const centerOffsetY = (canvas.height - height * baseScale) / 2 - minY * baseScale
-
-  // 应用视图变换
-  const finalScale = baseScale * viewState.value.scale
-  const finalOffsetX = centerOffsetX + viewState.value.offsetX
-  const finalOffsetY = centerOffsetY + viewState.value.offsetY
-
-  // 绘制多边形
-  ctx.beginPath()
-  points.forEach((p, i) => {
-    const x = p.x * finalScale + finalOffsetX
-    const y = p.y * finalScale + finalOffsetY
-    if (i === 0) {
-      ctx.moveTo(x, y)
-    } else {
-      ctx.lineTo(x, y)
-    }
-  })
-  ctx.closePath()
-
-  // 填充
-  ctx.fillStyle = hexToRgba(polygon.color, 0.3)
-  ctx.fill()
-
-  // 边框
-  ctx.strokeStyle = polygon.color
-  ctx.lineWidth = selectedPolygonId.value === polygon.id ? 3 : 2
-  ctx.stroke()
-
-  // 绘制顶点
-  points.forEach((p, i) => {
-    const x = p.x * finalScale + finalOffsetX
-    const y = p.y * finalScale + finalOffsetY
-
-    ctx.beginPath()
-    ctx.arc(x, y, 5, 0, Math.PI * 2)
-    ctx.fillStyle = polygon.color
-    ctx.fill()
-
-    ctx.fillStyle = '#333'
-    ctx.font = '12px Arial'
-    ctx.fillText(`${i + 1}`, x + 8, y - 8)
-  })
-}
-
-// 颜色转换
-const hexToRgba = (hex: string, alpha: number) => {
-  const r = parseInt(hex.slice(1, 3), 16)
-  const g = parseInt(hex.slice(3, 5), 16)
-  const b = parseInt(hex.slice(5, 7), 16)
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
-}
-
-// 绘制网格
-const drawGrid = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
-  ctx.strokeStyle = '#e0e0e0'
-  ctx.lineWidth = 1
-
-  const gridSize = 50 * viewState.value.scale
-  const offsetX = viewState.value.offsetX % gridSize
-  const offsetY = viewState.value.offsetY % gridSize
-
-  for (let x = offsetX; x <= width; x += gridSize) {
-    ctx.beginPath()
-    ctx.moveTo(x, 0)
-    ctx.lineTo(x, height)
-    ctx.stroke()
-  }
-
-  for (let y = offsetY; y <= height; y += gridSize) {
-    ctx.beginPath()
-    ctx.moveTo(0, y)
-    ctx.lineTo(width, y)
-    ctx.stroke()
-  }
-}
-
-// 添加多边形
-const addPolygon = () => {
+// 添加图形
+const addGeometry = (partialGeometry: Omit<Geometry, 'id' | 'name' | 'color'>) => {
   errorMsg.value = ''
-  if (!inputText.value.trim()) {
-    errorMsg.value = '请输入点集数据'
-    return
-  }
 
-  try {
-    const points = JSON.parse(inputText.value) as Point[]
-    if (!Array.isArray(points)) {
-      errorMsg.value = '输入必须是数组格式'
-      return
-    }
+  const newGeometry: Geometry = {
+    ...partialGeometry,
+    id: generateId(),
+    name: `多边形 ${geometries.value.length + 1}`,
+    color: getNextColor()
+  } as Geometry
 
-    const validPoints = points.filter(p => 
-      typeof p.x === 'number' && typeof p.y === 'number'
-    )
+  geometries.value.push(newGeometry)
+  selectedId.value = newGeometry.id
+  drawAll()
+}
 
-    if (validPoints.length !== points.length) {
-      errorMsg.value = '所有点必须包含 x 和 y 数字属性'
-      return
-    }
+// 生成随机测试多边形
+const generateRandomTestPolygon = () => {
+  errorMsg.value = ''
 
-    if (validPoints.length < 3) {
-      errorMsg.value = '至少需要3个点才能绘制多边形'
-      return
-    }
+  // 获取现有的多边形
+  const existingPolygons = geometries.value.filter(
+    g => g.type === GeometryType.POLYGON
+  ) as Polygon[]
 
-    const newPolygon: Polygon = {
-      id: generateId(),
-      name: `多边形 ${polygons.value.length + 1}`,
-      points: validPoints,
-      color: getNextColor(),
-      visible: true
-    }
+  const newPolygon = generateNonOverlappingPolygon(existingPolygons)
 
-    polygons.value.push(newPolygon)
-    selectedPolygonId.value = newPolygon.id
-    inputText.value = ''
-    drawAllPolygons()
-  } catch (e) {
-    errorMsg.value = 'JSON 格式错误，请检查输入'
+  if (newPolygon) {
+    addGeometry(newPolygon)
+  } else {
+    errorMsg.value = '无法生成不重叠的多边形，请尝试重置视图或清空画布'
   }
 }
 
-// 删除多边形
-const deletePolygon = (id: string) => {
-  const index = polygons.value.findIndex(p => p.id === id)
+// 删除图形
+const deleteGeometry = (id: string) => {
+  const index = geometries.value.findIndex(g => g.id === id)
   if (index > -1) {
-    polygons.value.splice(index, 1)
-    if (selectedPolygonId.value === id) {
-      selectedPolygonId.value = null
+    geometries.value.splice(index, 1)
+    if (selectedId.value === id) {
+      selectedId.value = null
     }
-    drawAllPolygons()
+    drawAll()
   }
+}
+
+// 切换可见性
+const toggleVisibility = (geometry: Geometry) => {
+  geometry.visible = !geometry.visible
+  drawAll()
+}
+
+// 选择图形
+const selectGeometry = (id: string) => {
+  selectedId.value = id
+  drawAll()
 }
 
 // 开始重命名
-const startRename = (polygon: Polygon) => {
-  editingNameId.value = polygon.id
-  editingName.value = polygon.name
+const startRename = (geometry: Geometry) => {
+  editingNameId.value = geometry.id
+  editingName.value = geometry.name
 }
 
 // 确认重命名
 const confirmRename = () => {
   if (editingNameId.value) {
-    const polygon = polygons.value.find(p => p.id === editingNameId.value)
-    if (polygon && editingName.value.trim()) {
-      polygon.name = editingName.value.trim()
+    const geometry = geometries.value.find(g => g.id === editingNameId.value)
+    if (geometry && editingName.value.trim()) {
+      geometry.name = editingName.value.trim()
     }
     editingNameId.value = null
     editingName.value = ''
@@ -262,16 +143,24 @@ const cancelRename = () => {
   editingName.value = ''
 }
 
-// 切换多边形可见性
-const toggleVisibility = (polygon: Polygon) => {
-  polygon.visible = !polygon.visible
-  drawAllPolygons()
+// 重置视图
+const resetView = () => {
+  viewState.value = { scale: 1, offsetX: 0, offsetY: 0 }
+  drawAll()
 }
 
-// 选择多边形
-const selectPolygon = (id: string) => {
-  selectedPolygonId.value = id
-  drawAllPolygons()
+// 清空所有
+const clearAll = () => {
+  if (confirm('确定要清空所有图形吗？')) {
+    geometries.value = []
+    selectedId.value = null
+    drawAll()
+  }
+}
+
+// 清空错误
+const clearError = () => {
+  errorMsg.value = ''
 }
 
 // 设置画布大小
@@ -281,23 +170,23 @@ const resizeCanvas = () => {
 
   canvas.width = window.innerWidth
   canvas.height = window.innerHeight
-  drawAllPolygons()
+  drawAll()
 }
 
 // 滚轮缩放
 const handleWheel = (e: WheelEvent) => {
   e.preventDefault()
-  
+
   const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1
   const newScale = viewState.value.scale * scaleFactor
-  
+
   if (newScale < 0.1 || newScale > 10) return
-  
+
   viewState.value.scale = newScale
-  drawAllPolygons()
+  drawAll()
 }
 
-// 鼠标按下开始拖拽
+// 鼠标按下
 const handleMouseDown = (e: MouseEvent) => {
   if (e.button === 0) {
     isDragging.value = true
@@ -305,45 +194,30 @@ const handleMouseDown = (e: MouseEvent) => {
   }
 }
 
-// 鼠标移动拖拽
+// 鼠标移动
 const handleMouseMove = (e: MouseEvent) => {
   if (!isDragging.value) return
-  
+
   const deltaX = e.clientX - lastMousePos.value.x
   const deltaY = e.clientY - lastMousePos.value.y
-  
+
   viewState.value.offsetX += deltaX
   viewState.value.offsetY += deltaY
-  
+
   lastMousePos.value = { x: e.clientX, y: e.clientY }
-  
-  drawAllPolygons()
+
+  drawAll()
 }
 
-// 鼠标释放结束拖拽
+// 鼠标释放
 const handleMouseUp = () => {
   isDragging.value = false
-}
-
-// 重置视图
-const resetView = () => {
-  viewState.value = { scale: 1, offsetX: 0, offsetY: 0 }
-  drawAllPolygons()
-}
-
-// 清空所有
-const clearAll = () => {
-  if (confirm('确定要清空所有多边形吗？')) {
-    polygons.value = []
-    selectedPolygonId.value = null
-    drawAllPolygons()
-  }
 }
 
 onMounted(() => {
   resizeCanvas()
   window.addEventListener('resize', resizeCanvas)
-  
+
   const canvas = canvasRef.value
   if (canvas) {
     canvas.addEventListener('wheel', handleWheel, { passive: false })
@@ -362,93 +236,77 @@ onUnmounted(() => {
 
 <template>
   <div class="container">
-    <div class="input-panel">
-      <h3>输入点集 (JSON 格式)</h3>
-      <textarea
-        v-model="inputText"
-        placeholder='[{"x": 100, "y": 100}, {"x": 200, "y": 100}, {"x": 150, "y": 200}]'
-        rows="8"
-      ></textarea>
-      <p v-if="errorMsg" class="error">{{ errorMsg }}</p>
-      <div class="input-actions">
-        <button class="btn-primary" @click="addPolygon">添加多边形</button>
-        <button class="btn-secondary" @click="inputText = ''">清空输入</button>
-      </div>
-      
-      <div class="polygon-list" v-if="polygons.length > 0">
-        <h4>多边形列表 ({{ polygons.length }})</h4>
-        <div 
-          v-for="polygon in polygons" 
-          :key="polygon.id"
-          class="polygon-item"
-          :class="{ selected: selectedPolygonId === polygon.id }"
-          @click="selectPolygon(polygon.id)"
-        >
-          <div class="polygon-color" :style="{ backgroundColor: polygon.color }"></div>
-          
-          <div class="polygon-info" v-if="editingNameId !== polygon.id">
-            <span class="polygon-name">{{ polygon.name }}</span>
-            <span class="polygon-count">{{ polygon.points.length }}个点</span>
-          </div>
-          
-          <div class="polygon-edit" v-else @click.stop>
-            <input 
-              v-model="editingName" 
-              @keyup.enter="confirmRename"
-              @keyup.esc="cancelRename"
-              @blur="confirmRename"
-              ref="renameInput"
-              autofocus
-            />
-          </div>
-          
-          <div class="polygon-actions">
-            <button 
-              class="btn-icon" 
-              :class="{ active: polygon.visible }"
-              @click.stop="toggleVisibility(polygon)"
-              :title="polygon.visible ? '隐藏' : '显示'"
-            >
-              {{ polygon.visible ? '👁' : '🚫' }}
-            </button>
-            <button 
-              class="btn-icon" 
-              @click.stop="startRename(polygon)"
-              title="重命名"
-            >
-              ✏️
-            </button>
-            <button 
-              class="btn-icon btn-delete" 
-              @click.stop="deletePolygon(polygon.id)"
-              title="删除"
-            >
-              🗑️
-            </button>
+    <!-- 输入面板 -->
+    <InputPanel
+      :geometries-count="geometries.length"
+      :view-scale="viewState.scale"
+      @add="addGeometry"
+      @error="errorMsg = $event"
+      @clear="clearError"
+      @reset-view="resetView"
+      @clear-all="clearAll"
+      @generate-random="generateRandomTestPolygon"
+    />
+
+    <!-- 图形列表 -->
+    <div class="list-container">
+      <GeometryList
+        :geometries="geometries"
+        :selected-id="selectedId"
+        @select="selectGeometry"
+        @toggle-visibility="toggleVisibility"
+        @start-rename="startRename"
+        @delete="deleteGeometry"
+      />
+
+      <!-- 重命名输入框 -->
+      <div v-if="editingNameId" class="rename-overlay" @click="cancelRename">
+        <div class="rename-modal" @click.stop>
+          <h4>重命名</h4>
+          <input
+            v-model="editingName"
+            @keyup.enter="confirmRename"
+            @keyup.esc="cancelRename"
+            placeholder="输入新名称"
+            autofocus
+          />
+          <div class="rename-actions">
+            <button class="btn-primary" @click="confirmRename">确定</button>
+            <button class="btn-secondary" @click="cancelRename">取消</button>
           </div>
         </div>
       </div>
-      
-      <div class="controls" v-if="polygons.length > 0">
-        <button class="btn-secondary" @click="resetView">重置视图</button>
-        <button class="btn-danger" @click="clearAll">清空全部</button>
-      </div>
-      <div class="scale-info" v-if="polygons.length > 0">
-        缩放: {{ (viewState.scale * 100).toFixed(0) }}%
-      </div>
     </div>
-    
-    <canvas 
-      ref="canvasRef" 
-      class="canvas"
+
+    <!-- 画布 -->
+    <canvas
+      ref="canvasRef"
+      class="dark-canvas"
       :class="{ dragging: isDragging }"
-    ></canvas>
-    
-    <div class="help-tip">
-      <p>🖱️ 滚轮缩放 | 左键拖拽移动</p>
+    />
+
+    <!-- 操作提示 -->
+    <div class="floating-hint">
+      <div class="hint-content">
+        <span class="key">滚轮</span>
+        <span>缩放</span>
+        <span class="divider">|</span>
+        <span class="key">拖拽</span>
+        <span>移动</span>
+      </div>
     </div>
   </div>
 </template>
+
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+</style>
 
 <style scoped>
 .container {
@@ -456,242 +314,156 @@ onUnmounted(() => {
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #000;
 }
 
-.input-panel {
+.list-container {
   position: absolute;
   top: 20px;
-  left: 20px;
+  left: 380px;
   z-index: 100;
-  background: rgba(255, 255, 255, 0.95);
-  padding: 20px;
-  border-radius: 8px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
   width: 320px;
   max-height: calc(100vh - 40px);
+  background: rgba(20, 20, 30, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  padding: 20px;
   overflow-y: auto;
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.05) inset;
 }
 
-.input-panel h3 {
-  margin: 0 0 12px 0;
-  color: #333;
+.list-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.list-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.list-container::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.rename-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.rename-modal {
+  background: rgba(30, 30, 40, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 24px;
+  min-width: 280px;
+}
+
+.rename-modal h4 {
+  color: #fff;
+  margin-bottom: 16px;
   font-size: 16px;
 }
 
-.input-panel textarea {
+.rename-modal input {
   width: 100%;
-  padding: 10px;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
-  font-family: 'Courier New', monospace;
-  font-size: 13px;
-  resize: vertical;
-  box-sizing: border-box;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: #fff;
+  font-size: 14px;
+  margin-bottom: 16px;
 }
 
-.input-panel textarea:focus {
+.rename-modal input:focus {
   outline: none;
-  border-color: #409eff;
+  border-color: #00f5ff;
 }
 
-.error {
-  color: #f56c6c;
-  font-size: 12px;
-  margin: 8px 0 0 0;
-}
-
-.input-actions {
+.rename-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 10px;
 }
 
 .btn-primary {
   flex: 1;
-  padding: 8px 16px;
-  background: #409eff;
-  color: white;
+  padding: 10px;
+  background: linear-gradient(135deg, #00f5ff 0%, #00c8ff 100%);
   border: none;
-  border-radius: 4px;
+  border-radius: 8px;
+  color: #000;
+  font-weight: 600;
   cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-primary:hover {
-  background: #66b1ff;
 }
 
 .btn-secondary {
-  padding: 8px 16px;
-  background: #909399;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-secondary:hover {
-  background: #a6a9ad;
-}
-
-.btn-danger {
-  padding: 8px 16px;
-  background: #f56c6c;
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.btn-danger:hover {
-  background: #f78989;
-}
-
-.polygon-list {
-  margin-top: 20px;
-  border-top: 1px solid #e4e7ed;
-  padding-top: 16px;
-}
-
-.polygon-list h4 {
-  margin: 0 0 12px 0;
-  color: #606266;
-  font-size: 14px;
-}
-
-.polygon-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  flex: 1;
   padding: 10px;
-  background: #f5f7fa;
-  border-radius: 4px;
-  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  color: #fff;
   cursor: pointer;
-  transition: all 0.2s;
 }
 
-.polygon-item:hover {
-  background: #ebeef5;
-}
-
-.polygon-item.selected {
-  background: #ecf5ff;
-  border: 1px solid #409eff;
-}
-
-.polygon-color {
-  width: 12px;
-  height: 12px;
-  border-radius: 2px;
-  flex-shrink: 0;
-}
-
-.polygon-info {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.polygon-name {
-  font-size: 13px;
-  color: #303133;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.polygon-count {
-  font-size: 11px;
-  color: #909399;
-}
-
-.polygon-edit {
-  flex: 1;
-}
-
-.polygon-edit input {
-  width: 100%;
-  padding: 4px 8px;
-  border: 1px solid #409eff;
-  border-radius: 4px;
-  font-size: 13px;
-  box-sizing: border-box;
-}
-
-.polygon-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.btn-icon {
-  padding: 4px 6px;
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  opacity: 0.6;
-  transition: all 0.2s;
-}
-
-.btn-icon:hover {
-  opacity: 1;
-  background: rgba(0, 0, 0, 0.1);
-}
-
-.btn-icon.active {
-  opacity: 1;
-}
-
-.btn-delete:hover {
-  background: #fde2e2;
-}
-
-.controls {
-  display: flex;
-  gap: 8px;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid #e4e7ed;
-}
-
-.scale-info {
-  margin-top: 12px;
-  font-size: 12px;
-  color: #606266;
-  text-align: center;
-}
-
-.canvas {
+.dark-canvas {
   display: block;
   width: 100vw;
   height: 100vh;
-  background: #f5f7fa;
+  background: #000;
   cursor: grab;
 }
 
-.canvas.dragging {
+.dark-canvas.dragging {
   cursor: grabbing;
 }
 
-.help-tip {
+.floating-hint {
   position: absolute;
-  bottom: 20px;
-  right: 20px;
-  background: rgba(0, 0, 0, 0.6);
-  color: white;
-  padding: 8px 16px;
-  border-radius: 4px;
-  font-size: 13px;
-  pointer-events: none;
+  bottom: 24px;
+  right: 24px;
+  z-index: 50;
 }
 
-.help-tip p {
-  margin: 0;
+.hint-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 20px;
+  background: rgba(20, 20, 30, 0.8);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.6);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+}
+
+.key {
+  padding: 4px 10px;
+  background: rgba(0, 245, 255, 0.15);
+  border: 1px solid rgba(0, 245, 255, 0.3);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #00f5ff;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.divider {
+  color: rgba(255, 255, 255, 0.2);
 }
 </style>
