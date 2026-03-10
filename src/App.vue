@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { Geometry, Polygon, ViewState, Point } from '@/types'
 import { generateId, getNextColor } from '@/types'
 import { 
@@ -11,6 +11,7 @@ import {
 import { generateNonOverlappingPolygon } from '@/utils/geometryGenerator'
 import DraggablePanel from '@/components/DraggablePanel.vue'
 import GeometryList from '@/components/GeometryList.vue'
+import RealtimeInput from '@/components/RealtimeInput.vue'
 
 // 状态
 const geometries = ref<Geometry[]>([])
@@ -25,6 +26,32 @@ const hoveredVertex = ref<{ geometryId: string; vertexIndex: number; point: Poin
 
 // 最后经过的顶点（保持高亮）
 const lastHoveredVertex = ref<{ geometryId: string; vertexIndex: number; point: Point } | null>(null)
+
+// 测距功能
+const isMeasuring = ref(false)
+const measureStart = ref<Point | null>(null)
+const measureEnd = ref<Point | null>(null)
+const snappedPoint = ref<Point | null>(null)
+const snapType = ref<'none' | 'vertex' | 'edge'>('none')
+
+// 已完成的测距线列表
+const measurements = ref<Array<{ id: string; start: Point; end: Point; distance: number }>>([])
+const selectedMeasurementId = ref<string | null>(null)
+const hoveredMeasurementId = ref<string | null>(null)
+const measurementDeleteBtnPos = ref<{ x: number; y: number; measurementId: string } | null>(null)
+
+// 吸附阈值（像素）
+const SNAP_THRESHOLD = 15
+const EDGE_SNAP_THRESHOLD = 10
+
+// 计算距离
+const calculateDistance = (a: Point, b: Point): number => {
+  return Math.sqrt(Math.pow(b.x - a.x, 2) + Math.pow(b.y - a.y, 2))
+}
+
+// 渲染优化相关
+const animationFrameId = ref<number | null>(null)
+const needsRedraw = ref(false)
 
 // 计算鼠标在世界坐标系中的位置
 const mouseWorldPos = computed(() => {
@@ -57,15 +84,83 @@ const editingName = ref('')
 
 // 面板折叠状态
 const isListCollapsed = ref(false)
+const isInputCollapsed = ref(false)
+
+// 从 localStorage 读取位置
+const loadPanelPositions = () => {
+  try {
+    const saved = localStorage.getItem('polygon-drawer-positions')
+    if (saved) {
+      const positions = JSON.parse(saved)
+      return {
+        input: positions.input || { x: 20, y: 20 },
+        list: positions.list || { x: 20, y: 380 }
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load positions:', e)
+  }
+  return {
+    input: { x: 20, y: 20 },
+    list: { x: 20, y: 380 }
+  }
+}
+
+const savedPositions = loadPanelPositions()
 
 // 输入面板位置
-const inputPanelPos = ref({ x: 20, y: 20 })
+const inputPanelPos = ref(savedPositions.input)
 
 // 图形列表位置
-const listPanelPos = ref({ x: 380, y: 20 })
+const listPanelPos = ref(savedPositions.list)
 
-// 绘制所有图形
+// 保存位置到 localStorage
+const savePanelPositions = () => {
+  try {
+    localStorage.setItem('polygon-drawer-positions', JSON.stringify({
+      input: inputPanelPos.value,
+      list: listPanelPos.value
+    }))
+  } catch (e) {
+    console.error('Failed to save positions:', e)
+  }
+}
+
+// 监听位置变化并保存
+watch(inputPanelPos, savePanelPositions, { deep: true })
+watch(listPanelPos, savePanelPositions, { deep: true })
+
+// 世界坐标转屏幕坐标
+const worldToScreen = (point: Point): { x: number; y: number } => {
+  const canvas = canvasRef.value
+  if (!canvas) return { x: 0, y: 0 }
+  
+  const centerX = canvas.width / 2
+  const centerY = canvas.height / 2
+  
+  return {
+    x: centerX + (point.x * viewState.value.scale) + viewState.value.offsetX,
+    y: centerY + (point.y * viewState.value.scale) + viewState.value.offsetY
+  }
+}
+
+// 使用 requestAnimationFrame 的绘制函数
+const scheduleDraw = () => {
+  needsRedraw.value = true
+  if (!animationFrameId.value) {
+    animationFrameId.value = requestAnimationFrame(() => {
+      drawAll()
+      animationFrameId.value = null
+      if (needsRedraw.value) {
+        scheduleDraw()
+      }
+    })
+  }
+}
+
+// 实际绘制函数
 const drawAll = () => {
+  needsRedraw.value = false
   const canvas = canvasRef.value
   if (!canvas) return
 
@@ -88,24 +183,377 @@ const drawAll = () => {
       drawGeometry(ctx, geometry, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex)
     }
   })
+
+  // 绘制吸附点
+  if (snappedPoint.value && snapType.value !== 'none') {
+    const screenPos = worldToScreen(snappedPoint.value)
+    ctx.beginPath()
+    ctx.arc(screenPos.x, screenPos.y, 8, 0, Math.PI * 2)
+    ctx.fillStyle = snapType.value === 'vertex' ? 'rgba(255, 255, 0, 0.5)' : 'rgba(0, 255, 136, 0.5)'
+    ctx.fill()
+    ctx.strokeStyle = snapType.value === 'vertex' ? '#ffff00' : '#00ff88'
+    ctx.lineWidth = 2
+    ctx.stroke()
+  }
+
+  // 绘制测距线
+  if (isMeasuring.value && measureStart.value && measureEnd.value) {
+    const start = worldToScreen(measureStart.value)
+    const end = worldToScreen(measureEnd.value)
+
+    // 绘制测距线
+    ctx.beginPath()
+    ctx.moveTo(start.x, start.y)
+    ctx.lineTo(end.x, end.y)
+    ctx.strokeStyle = '#00f5ff'
+    ctx.lineWidth = 2
+    ctx.setLineDash([5, 5])
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // 绘制起点
+    ctx.beginPath()
+    ctx.arc(start.x, start.y, 6, 0, Math.PI * 2)
+    ctx.fillStyle = '#00ff88'
+    ctx.fill()
+    ctx.strokeStyle = '#fff'
+    ctx.lineWidth = 2
+    ctx.stroke()
+
+    // 绘制终点
+    ctx.beginPath()
+    ctx.arc(end.x, end.y, 6, 0, Math.PI * 2)
+    ctx.fillStyle = '#ff6b6b'
+    ctx.fill()
+    ctx.strokeStyle = '#fff'
+    ctx.lineWidth = 2
+    ctx.stroke()
+
+    // 绘制距离标签背景
+    const midX = (start.x + end.x) / 2
+    const midY = (start.y + end.y) / 2
+    const distance = calculateDistance(measureStart.value, measureEnd.value)
+    const label = distance.toFixed(2)
+    ctx.font = 'bold 14px "JetBrains Mono", monospace'
+    const textWidth = ctx.measureText(label).width
+
+    ctx.fillStyle = 'rgba(0, 245, 255, 0.2)'
+    ctx.strokeStyle = 'rgba(0, 245, 255, 0.5)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.roundRect(midX - textWidth / 2 - 8, midY - 12, textWidth + 16, 24, 4)
+    ctx.fill()
+    ctx.stroke()
+
+    // 绘制距离标签文字
+    ctx.fillStyle = '#00f5ff'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, midX, midY)
+  }
+
+  // 绘制已保存的测距线
+  measurements.value.forEach(measurement => {
+    const isSelected = selectedMeasurementId.value === measurement.id
+    const isHovered = hoveredMeasurementId.value === measurement.id
+    const start = worldToScreen(measurement.start)
+    const end = worldToScreen(measurement.end)
+
+    // 绘制测距线 - 悬浮时为黄色，选中时为紫色，默认青色
+    ctx.beginPath()
+    ctx.moveTo(start.x, start.y)
+    ctx.lineTo(end.x, end.y)
+    if (isHovered) {
+      ctx.strokeStyle = '#ffff00'
+      ctx.lineWidth = 3
+    } else if (isSelected) {
+      ctx.strokeStyle = '#ff00ff'
+      ctx.lineWidth = 3
+    } else {
+      ctx.strokeStyle = '#00f5ff'
+      ctx.lineWidth = 2
+    }
+    ctx.setLineDash([5, 5])
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // 绘制起点
+    ctx.beginPath()
+    ctx.arc(start.x, start.y, isHovered || isSelected ? 7 : 5, 0, Math.PI * 2)
+    ctx.fillStyle = '#00ff88'
+    ctx.fill()
+    if (isHovered) {
+      ctx.strokeStyle = '#ffff00'
+    } else if (isSelected) {
+      ctx.strokeStyle = '#ff00ff'
+    } else {
+      ctx.strokeStyle = '#fff'
+    }
+    ctx.lineWidth = 2
+    ctx.stroke()
+
+    // 绘制终点
+    ctx.beginPath()
+    ctx.arc(end.x, end.y, isHovered || isSelected ? 7 : 5, 0, Math.PI * 2)
+    ctx.fillStyle = '#ff6b6b'
+    ctx.fill()
+    if (isHovered) {
+      ctx.strokeStyle = '#ffff00'
+    } else if (isSelected) {
+      ctx.strokeStyle = '#ff00ff'
+    } else {
+      ctx.strokeStyle = '#fff'
+    }
+    ctx.lineWidth = 2
+    ctx.stroke()
+
+    // 计算标签位置（稍微偏移避免遮挡线条）
+    const midX = (start.x + end.x) / 2
+    const midY = (start.y + end.y) / 2
+    const dx = end.x - start.x
+    const dy = end.y - start.y
+    const len = Math.sqrt(dx * dx + dy * dy)
+
+    // 垂直于线条的偏移方向 - 增加偏移距离到 30
+    let offsetX = 0
+    let offsetY = -30
+    if (len > 0) {
+      offsetX = -(dy / len) * 30
+      offsetY = (dx / len) * 30
+    }
+
+    const labelX = midX + offsetX
+    const labelY = midY + offsetY
+    const label = measurement.distance.toFixed(2)
+
+    // 绘制标签背景
+    ctx.font = 'bold 13px "JetBrains Mono", monospace'
+    const textWidth = ctx.measureText(label).width
+
+    if (isHovered) {
+      ctx.fillStyle = 'rgba(255, 255, 0, 0.3)'
+      ctx.strokeStyle = 'rgba(255, 255, 0, 0.8)'
+      ctx.lineWidth = 2
+    } else if (isSelected) {
+      ctx.fillStyle = 'rgba(255, 0, 255, 0.3)'
+      ctx.strokeStyle = 'rgba(255, 0, 255, 0.6)'
+      ctx.lineWidth = 1
+    } else {
+      ctx.fillStyle = 'rgba(0, 245, 255, 0.2)'
+      ctx.strokeStyle = 'rgba(0, 245, 255, 0.5)'
+      ctx.lineWidth = 1
+    }
+    ctx.beginPath()
+    ctx.roundRect(labelX - textWidth / 2 - 6, labelY - 10, textWidth + 12, 20, 4)
+    ctx.fill()
+    ctx.stroke()
+
+    // 绘制距离标签文字
+    if (isHovered) {
+      ctx.fillStyle = '#ffff00'
+    } else if (isSelected) {
+      ctx.fillStyle = '#ff00ff'
+    } else {
+      ctx.fillStyle = '#00f5ff'
+    }
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, labelX, labelY)
+
+    // 如果悬浮或选中，绘制删除按钮
+    if (isHovered || isSelected) {
+      const btnX = labelX + textWidth / 2 + 20
+      const btnY = labelY
+
+      // 删除按钮背景
+      ctx.beginPath()
+      ctx.arc(btnX, btnY, 12, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.8)'
+      ctx.fill()
+      ctx.strokeStyle = '#ff0000'
+      ctx.lineWidth = 2
+      ctx.stroke()
+
+      // 删除按钮 X 符号
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(btnX - 4, btnY - 4)
+      ctx.lineTo(btnX + 4, btnY + 4)
+      ctx.moveTo(btnX + 4, btnY - 4)
+      ctx.lineTo(btnX - 4, btnY + 4)
+      ctx.stroke()
+
+      // 保存删除按钮位置供点击检测
+      measurementDeleteBtnPos.value = { x: btnX, y: btnY, measurementId: measurement.id }
+    }
+  })
 }
 
-// 处理鼠标移动
+// 计算点到线段的距离和最近点
+const pointToSegmentDistance = (p: Point, a: Point, b: Point): { distance: number; closestPoint: Point } => {
+  const ab = { x: b.x - a.x, y: b.y - a.y }
+  const ap = { x: p.x - a.x, y: p.y - a.y }
+  const abLen = Math.sqrt(ab.x * ab.x + ab.y * ab.y)
+  
+  if (abLen === 0) {
+    return { distance: Math.sqrt(ap.x * ap.x + ap.y * ap.y), closestPoint: a }
+  }
+  
+  const t = Math.max(0, Math.min(1, (ap.x * ab.x + ap.y * ab.y) / (abLen * abLen)))
+  const closestPoint = {
+    x: a.x + t * ab.x,
+    y: a.y + t * ab.y
+  }
+  
+  const dx = p.x - closestPoint.x
+  const dy = p.y - closestPoint.y
+  
+  return { distance: Math.sqrt(dx * dx + dy * dy), closestPoint }
+}
+
+// 检测是否点击了测距线
+const detectMeasurementClick = (worldPos: Point): { id: string } | null => {
+  const CLICK_THRESHOLD = 10 / viewState.value.scale // 10像素的点击阈值，转换为世界坐标
+
+  for (let i = measurements.value.length - 1; i >= 0; i--) {
+    const measurement = measurements.value[i]
+    const { distance } = pointToSegmentDistance(worldPos, measurement.start, measurement.end)
+
+    if (distance < CLICK_THRESHOLD) {
+      return { id: measurement.id }
+    }
+  }
+  return null
+}
+
+// 删除选中的测距线
+const deleteSelectedMeasurement = () => {
+  if (selectedMeasurementId.value) {
+    const index = measurements.value.findIndex(m => m.id === selectedMeasurementId.value)
+    if (index > -1) {
+      measurements.value.splice(index, 1)
+      selectedMeasurementId.value = null
+      measurementDeleteBtnPos.value = null
+      scheduleDraw()
+    }
+  }
+}
+
+// 删除指定测距线
+const deleteMeasurement = (id: string) => {
+  const index = measurements.value.findIndex(m => m.id === id)
+  if (index > -1) {
+    measurements.value.splice(index, 1)
+    if (selectedMeasurementId.value === id) {
+      selectedMeasurementId.value = null
+    }
+    measurementDeleteBtnPos.value = null
+    scheduleDraw()
+  }
+}
+
+// 检测测距线悬浮
+const detectMeasurementHover = (worldPos: Point): { id: string } | null => {
+  const HOVER_THRESHOLD = 8 / viewState.value.scale // 8像素的悬浮阈值
+
+  for (let i = measurements.value.length - 1; i >= 0; i--) {
+    const measurement = measurements.value[i]
+    const { distance } = pointToSegmentDistance(worldPos, measurement.start, measurement.end)
+
+    if (distance < HOVER_THRESHOLD) {
+      return { id: measurement.id }
+    }
+  }
+  return null
+}
+
+// 吸附检测
+const detectSnap = (worldPos: Point): { point: Point; type: 'vertex' | 'edge' | 'none' } => {
+  let minDist = Infinity
+  let snapPoint = worldPos
+  let snapType: 'vertex' | 'edge' | 'none' = 'none'
+  
+  // 检测顶点吸附
+  for (const geometry of geometries.value) {
+    if (!geometry.visible || geometry.type !== 'polygon') continue
+    
+    const polygon = geometry as Polygon
+    for (const point of polygon.points) {
+      const dist = Math.sqrt(
+        Math.pow(point.x - worldPos.x, 2) + 
+        Math.pow(point.y - worldPos.y, 2)
+      )
+      const screenDist = dist * viewState.value.scale
+      
+      if (screenDist < SNAP_THRESHOLD && screenDist < minDist) {
+        minDist = screenDist
+        snapPoint = point
+        snapType = 'vertex'
+      }
+    }
+    
+    // 检测边吸附
+    if (snapType === 'none') {
+      const points = polygon.points
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i]
+        const b = points[(i + 1) % points.length]
+        const { distance, closestPoint } = pointToSegmentDistance(worldPos, a, b)
+        const screenDist = distance * viewState.value.scale
+        
+        if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < minDist) {
+          minDist = screenDist
+          snapPoint = closestPoint
+          snapType = 'edge'
+        }
+      }
+    }
+  }
+  
+  return { point: snapPoint, type: snapType }
+}
+
+// 处理鼠标移动 - 优化版本，减少不必要的重绘
 const handleMouseMove = (e: MouseEvent) => {
   const canvas = canvasRef.value
   if (!canvas) return
 
   // 获取鼠标在画布上的位置
   const rect = canvas.getBoundingClientRect()
-  mousePos.value = {
+  const newMousePos = {
     x: e.clientX - rect.left,
     y: e.clientY - rect.top
   }
 
-  // 检测悬停
+  // 计算世界坐标
+  const centerX = canvas.width / 2
+  const centerY = canvas.height / 2
+  const worldPos = {
+    x: (newMousePos.x - centerX - viewState.value.offsetX) / viewState.value.scale,
+    y: (newMousePos.y - centerY - viewState.value.offsetY) / viewState.value.scale
+  }
+
+  // 检测吸附
+  const snap = detectSnap(worldPos)
+  const snapChanged = (snappedPoint.value?.x !== snap.point.x || snappedPoint.value?.y !== snap.point.y || snapType.value !== snap.type)
+  snappedPoint.value = snap.type !== 'none' ? snap.point : null
+  snapType.value = snap.type
+
+  // 更新测距终点
+  let measureChanged = false
+  if (isMeasuring.value) {
+    const newEnd = snap.point || worldPos
+    if (!measureEnd.value || measureEnd.value.x !== newEnd.x || measureEnd.value.y !== newEnd.y) {
+      measureEnd.value = newEnd
+      measureChanged = true
+    }
+  }
+
+  // 检测悬停 - 只在鼠标位置变化较大或需要时检测
   const result = detectHover(
-    mousePos.value.x,
-    mousePos.value.y,
+    newMousePos.x,
+    newMousePos.y,
     geometries.value,
     viewState.value,
     canvas.width,
@@ -113,49 +561,161 @@ const handleMouseMove = (e: MouseEvent) => {
   )
 
   // 更新悬停状态
-  if (result.hoveredGeometryId !== hoveredId.value) {
+  const hoverChanged = result.hoveredGeometryId !== hoveredId.value
+  if (hoverChanged) {
     hoveredId.value = result.hoveredGeometryId
-    drawAll()
   }
 
   // 更新当前悬停顶点
+  const vertexChanged = 
+    (hoveredVertex.value?.geometryId !== result.hoveredVertex?.geometryId) ||
+    (hoveredVertex.value?.vertexIndex !== result.hoveredVertex?.vertexIndex)
   hoveredVertex.value = result.hoveredVertex
-  
+
   // 如果有新的悬停顶点，更新最后经过的顶点
+  let lastVertexChanged = false
   if (result.hoveredVertex) {
-    lastHoveredVertex.value = result.hoveredVertex
-    drawAll()
+    if (!lastHoveredVertex.value ||
+        lastHoveredVertex.value.geometryId !== result.hoveredVertex.geometryId ||
+        lastHoveredVertex.value.vertexIndex !== result.hoveredVertex.vertexIndex) {
+      lastHoveredVertex.value = result.hoveredVertex
+      lastVertexChanged = true
+    }
   }
 
+  // 更新鼠标位置
+  mousePos.value = newMousePos
+
   // 处理拖拽
+  let dragChanged = false
   if (isDragging.value) {
     const deltaX = e.clientX - lastMousePos.value.x
     const deltaY = e.clientY - lastMousePos.value.y
 
-    viewState.value.offsetX += deltaX
-    viewState.value.offsetY += deltaY
+    if (deltaX !== 0 || deltaY !== 0) {
+      viewState.value.offsetX += deltaX
+      viewState.value.offsetY += deltaY
+      dragChanged = true
+    }
 
     lastMousePos.value = { x: e.clientX, y: e.clientY }
+  }
 
-    drawAll()
+  // 检测测距线悬浮 - 只有检测到新的悬浮时才更新，移出时不清空
+  let measurementHoverChanged = false
+  if (!isMeasuring.value && !isDragging.value) {
+    const hoveredMeasurement = detectMeasurementHover(worldPos)
+    if (hoveredMeasurement?.id) {
+      // 只有悬浮到新的测距线时才更新
+      if (hoveredMeasurementId.value !== hoveredMeasurement.id) {
+        hoveredMeasurementId.value = hoveredMeasurement.id
+        measurementHoverChanged = true
+      }
+    }
+    // 注意：移出时不清空 hoveredMeasurementId，保持最后一个悬浮状态
+  }
+
+  // 只有在需要时才调度重绘
+  if (snapChanged || measureChanged || hoverChanged || vertexChanged || lastVertexChanged || dragChanged || isDragging.value || isMeasuring.value || measurementHoverChanged) {
+    scheduleDraw()
   }
 }
 
 // 处理鼠标按下
 const handleMouseDown = (e: MouseEvent) => {
+  const canvas = canvasRef.value
+  if (!canvas) return
+
+  // 获取点击位置的世界坐标
+  const rect = canvas.getBoundingClientRect()
+  const clickX = e.clientX - rect.left
+  const clickY = e.clientY - rect.top
+  const centerX = canvas.width / 2
+  const centerY = canvas.height / 2
+  const worldPos = {
+    x: (clickX - centerX - viewState.value.offsetX) / viewState.value.scale,
+    y: (clickY - centerY - viewState.value.offsetY) / viewState.value.scale
+  }
+
   if (e.button === 0) {
-    // 如果点击在顶点上，不启动拖拽
-    if (hoveredVertex.value) {
+    // 左键：拖动画布 或 Ctrl+左键测距
+    e.preventDefault()
+
+    // 检测是否点击了删除按钮
+    if (measurementDeleteBtnPos.value) {
+      const btnScreenX = measurementDeleteBtnPos.value.x
+      const btnScreenY = measurementDeleteBtnPos.value.y
+      const distToBtn = Math.sqrt(Math.pow(clickX - btnScreenX, 2) + Math.pow(clickY - btnScreenY, 2))
+      if (distToBtn < 15) {
+        // 点击了删除按钮
+        deleteMeasurement(measurementDeleteBtnPos.value.measurementId)
+        return
+      }
+    }
+
+    // 检测是否点击了已有的测距线
+    const clickedMeasurement = detectMeasurementClick(worldPos)
+    if (clickedMeasurement) {
+      selectedMeasurementId.value = clickedMeasurement.id
+      scheduleDraw()
       return
     }
-    
-    isDragging.value = true
-    lastMousePos.value = { x: e.clientX, y: e.clientY }
-    
-    // 点击时选中多边形
-    if (hoveredId.value) {
-      selectedId.value = hoveredId.value
-      drawAll()
+
+    if (e.ctrlKey) {
+      // Ctrl+左键：测距
+      selectedMeasurementId.value = null
+      measurementDeleteBtnPos.value = null
+
+      // 检测吸附
+      const snap = detectSnap(worldPos)
+      const finalPoint = snap.point || worldPos
+
+      if (!isMeasuring.value) {
+        // 开始测距
+        isMeasuring.value = true
+        measureStart.value = finalPoint
+        measureEnd.value = finalPoint
+      } else {
+        // 结束测距，保存到列表
+        if (measureStart.value) {
+          const distance = calculateDistance(measureStart.value, finalPoint)
+          measurements.value.push({
+            id: generateId(),
+            start: { ...measureStart.value },
+            end: { ...finalPoint },
+            distance
+          })
+        }
+        isMeasuring.value = false
+        measureStart.value = null
+        measureEnd.value = null
+        scheduleDraw()
+      }
+    } else {
+      // 普通左键：拖动画布
+      // 如果正在测距，左键取消测距
+      if (isMeasuring.value) {
+        isMeasuring.value = false
+        measureStart.value = null
+        measureEnd.value = null
+        scheduleDraw()
+        return
+      }
+
+      // 开始拖拽画布
+      isDragging.value = true
+      lastMousePos.value = { x: e.clientX, y: e.clientY }
+    }
+  } else if (e.button === 2) {
+    // 右键：取消测距（如果正在测距）
+    e.preventDefault()
+
+    // 如果正在测距，右键取消
+    if (isMeasuring.value) {
+      isMeasuring.value = false
+      measureStart.value = null
+      measureEnd.value = null
+      scheduleDraw()
     }
   }
 }
@@ -166,19 +726,29 @@ const handleMouseUp = () => {
 }
 
 // 添加图形
-const addGeometry = (partialGeometry: Omit<Geometry, 'id' | 'name' | 'color'>) => {
+const addGeometry = (partialGeometry: Omit<Geometry, 'id' | 'name' | 'color'>, isRealtime: boolean = false) => {
   errorMsg.value = ''
+
+  // 如果是实时输入，先移除之前通过实时输入添加的图形
+  if (isRealtime) {
+    const existingIndex = geometries.value.findIndex(g => g.name === '实时预览')
+    if (existingIndex > -1) {
+      geometries.value.splice(existingIndex, 1)
+    }
+  }
 
   const newGeometry: Geometry = {
     ...partialGeometry,
     id: generateId(),
-    name: `多边形 ${geometries.value.length + 1}`,
-    color: getNextColor()
+    name: isRealtime ? '实时预览' : `多边形 ${geometries.value.length + 1}`,
+    color: isRealtime ? '#00ff88' : getNextColor()
   } as Geometry
 
   geometries.value.push(newGeometry)
-  selectedId.value = newGeometry.id
-  drawAll()
+  if (!isRealtime) {
+    selectedId.value = newGeometry.id
+  }
+  scheduleDraw()
 }
 
 // 生成随机测试多边形
@@ -209,20 +779,20 @@ const deleteGeometry = (id: string) => {
     if (hoveredId.value === id) {
       hoveredId.value = null
     }
-    drawAll()
+    scheduleDraw()
   }
 }
 
 // 切换可见性
 const toggleVisibility = (geometry: Geometry) => {
   geometry.visible = !geometry.visible
-  drawAll()
+  scheduleDraw()
 }
 
 // 选择图形
 const selectGeometry = (id: string) => {
   selectedId.value = id
-  drawAll()
+  scheduleDraw()
 }
 
 // 开始重命名
@@ -252,7 +822,7 @@ const cancelRename = () => {
 // 重置视图
 const resetView = () => {
   viewState.value = { scale: 1, offsetX: 0, offsetY: 0 }
-  drawAll()
+  scheduleDraw()
 }
 
 // 清空所有
@@ -262,8 +832,55 @@ const clearAll = () => {
     selectedId.value = null
     hoveredId.value = null
     hoveredVertex.value = null
-    drawAll()
+    scheduleDraw()
   }
+}
+
+// 打印图形信息到控制台
+const printGeometries = () => {
+  console.log('%c=== 图形列表信息 ===', 'color: #00f5ff; font-size: 16px; font-weight: bold;')
+  console.log(`总计: ${geometries.value.length} 个图形`)
+  console.log('')
+  
+  // 输出对象数组
+  const geometryObjects = geometries.value.map((geometry, index) => {
+    const obj: any = {
+      index: index + 1,
+      id: geometry.id,
+      name: geometry.name,
+      type: geometry.type,
+      color: geometry.color,
+      visible: geometry.visible
+    }
+    
+    if (geometry.type === 'polygon') {
+      const polygon = geometry as Polygon
+      obj.pointCount = polygon.points.length
+      obj.points = polygon.points.map((p, i) => ({
+        index: i + 1,
+        x: p.x,
+        y: p.y
+      }))
+    }
+    
+    return obj
+  })
+  
+  // 使用 console.table 输出表格
+  console.table(geometryObjects)
+  
+  // 详细输出每个图形对象
+  console.log('%c详细对象数据:', 'color: #ff00ff; font-size: 12px;')
+  geometryObjects.forEach((obj, i) => {
+    console.log(`%c[${i + 1}] ${obj.name}:`, 'color: #00f5ff; font-weight: bold;', obj)
+  })
+  
+  console.log('%c=== 视图状态 ===', 'color: #00f5ff; font-size: 14px; font-weight: bold;')
+  console.log('缩放比例:', (viewState.value.scale * 100).toFixed(0) + '%')
+  console.log('偏移 X:', viewState.value.offsetX.toFixed(2))
+  console.log('偏移 Y:', viewState.value.offsetY.toFixed(2))
+  console.log('')
+  console.log('%c数据已导出，可复制使用', 'color: #00ff88; font-size: 12px;')
 }
 
 // 清空错误
@@ -278,7 +895,7 @@ const resizeCanvas = () => {
 
   canvas.width = window.innerWidth
   canvas.height = window.innerHeight
-  drawAll()
+  scheduleDraw()
 }
 
 // 滚轮缩放
@@ -291,51 +908,12 @@ const handleWheel = (e: WheelEvent) => {
   if (newScale < 0.1 || newScale > 10) return
 
   viewState.value.scale = newScale
-  drawAll()
+  scheduleDraw()
 }
 
-// 面板拖拽相关
-const isPanelDragging = ref(false)
-const panelDragOffset = ref({ x: 0, y: 0 })
-const draggedPanel = ref<'input' | 'list' | null>(null)
-
-// 开始面板拖拽
-const startPanelDrag = (e: MouseEvent, panel: 'input' | 'list') => {
-  isPanelDragging.value = true
-  draggedPanel.value = panel
-  panelDragOffset.value = {
-    x: e.clientX - (panel === 'input' ? inputPanelPos.value.x : listPanelPos.value.x),
-    y: e.clientY - (panel === 'input' ? inputPanelPos.value.y : listPanelPos.value.y)
-  }
-}
-
-// 处理面板拖拽
-const handlePanelDrag = (e: MouseEvent) => {
-  if (!isPanelDragging.value || !draggedPanel.value) return
-  
-  const newX = e.clientX - panelDragOffset.value.x
-  const newY = e.clientY - panelDragOffset.value.y
-  
-  // 限制在视口内
-  const maxX = window.innerWidth - 100
-  const maxY = window.innerHeight - 50
-  
-  const pos = {
-    x: Math.max(0, Math.min(newX, maxX)),
-    y: Math.max(0, Math.min(newY, maxY))
-  }
-  
-  if (draggedPanel.value === 'input') {
-    inputPanelPos.value = pos
-  } else {
-    listPanelPos.value = pos
-  }
-}
-
-// 结束面板拖拽
-const endPanelDrag = () => {
-  isPanelDragging.value = false
-  draggedPanel.value = null
+// 禁用右键默认菜单
+const handleContextMenu = (e: MouseEvent) => {
+  e.preventDefault()
 }
 
 onMounted(() => {
@@ -347,19 +925,21 @@ onMounted(() => {
     canvas.addEventListener('wheel', handleWheel, { passive: false })
     canvas.addEventListener('mousemove', handleMouseMove)
     canvas.addEventListener('mousedown', handleMouseDown)
+    canvas.addEventListener('contextmenu', handleContextMenu)
     window.addEventListener('mouseup', handleMouseUp)
   }
-  
-  // 全局拖拽监听
-  window.addEventListener('mousemove', handlePanelDrag)
-  window.addEventListener('mouseup', endPanelDrag)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', resizeCanvas)
   window.removeEventListener('mouseup', handleMouseUp)
-  window.removeEventListener('mousemove', handlePanelDrag)
-  window.removeEventListener('mouseup', endPanelDrag)
+  const canvas = canvasRef.value
+  if (canvas) {
+    canvas.removeEventListener('contextmenu', handleContextMenu)
+  }
+  if (animationFrameId.value) {
+    cancelAnimationFrame(animationFrameId.value)
+  }
 })
 </script>
 
@@ -369,64 +949,17 @@ onUnmounted(() => {
     <DraggablePanel
       v-model:position="inputPanelPos"
       title="Polygon Studio"
+      :collapsed="isInputCollapsed"
+      @update:collapsed="isInputCollapsed = $event"
       class="input-panel"
     >
       <template #default>
-        <div class="input-section">
-          <label class="input-label">
-            <span class="label-icon">📐</span>
-            输入点集 (JSON)
-          </label>
-          <textarea
-            v-model="errorMsg"
-            placeholder='[{"x": 100, "y": 100}, {"x": 200, "y": 100}, {"x": 150, "y": 200}]'
-            rows="6"
-            class="glass-input"
-            readonly
-          ></textarea>
-          <p v-if="errorMsg" class="error-msg">
-            <span class="error-icon">⚠</span>
-            {{ errorMsg }}
-          </p>
-          <div class="input-actions">
-            <button class="btn-glow btn-primary" @click="addGeometry">
-              <span class="btn-icon">+</span>
-              添加多边形
-            </button>
-            <button class="btn-glass" @click="clearError">
-              清空
-            </button>
-            <button class="btn-test" @click="generateRandomTestPolygon" title="生成随机测试多边形">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-                <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
-                <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
-              </svg>
-              测试
-            </button>
-          </div>
-        </div>
-        
-        <div class="panel-footer" v-if="geometries.length > 0">
-          <button class="btn-glass" @click="resetView">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path>
-              <path d="M3 3v5h5"></path>
-            </svg>
-            重置视图
-          </button>
-          <button class="btn-danger" @click="clearAll">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
-            清空
-          </button>
-        </div>
-        
-        <div class="zoom-indicator" v-if="geometries.length > 0">
-          <span class="zoom-value">{{ (viewState.scale * 100).toFixed(0) }}%</span>
-        </div>
+        <RealtimeInput
+          @add="addGeometry"
+          @generate-random="generateRandomTestPolygon"
+          @print-geometries="printGeometries"
+          :geometries-count="geometries.length"
+        />
       </template>
     </DraggablePanel>
 
@@ -476,32 +1009,47 @@ onUnmounted(() => {
       :class="{ dragging: isDragging }"
     />
 
-    <!-- 右上角坐标提示 - 鼠标位置（一直显示） -->
-    <div class="coordinate-tooltip mouse-tooltip">
-      <div class="tooltip-content">
-        <span class="tooltip-label">鼠标位置</span>
-        <span class="tooltip-coords">
-          X: {{ mouseWorldPos.x.toFixed(2) }}
-        </span>
-        <span class="tooltip-coords">
-          Y: {{ mouseWorldPos.y.toFixed(2) }}
-        </span>
+    <!-- 右上角信息面板 -->
+    <div class="info-panel">
+      <!-- 缩放比例 -->
+      <div class="info-item">
+        <span class="info-label">缩放</span>
+        <span class="info-value zoom">{{ (viewState.scale * 100).toFixed(0) }}%</span>
       </div>
-    </div>
-
-    <!-- 顶点坐标提示（显示最后经过的顶点） -->
-    <div v-if="lastHoveredVertex" class="coordinate-tooltip vertex-tooltip">
-      <div class="tooltip-content">
-        <span class="tooltip-label vertex-active">
+      
+      <!-- 鼠标位置 -->
+      <div class="info-item">
+        <span class="info-label">鼠标</span>
+        <span class="info-value">X: {{ mouseWorldPos.x.toFixed(1) }}</span>
+        <span class="info-value">Y: {{ mouseWorldPos.y.toFixed(1) }}</span>
+      </div>
+      
+      <!-- 测距信息 -->
+      <div v-if="isMeasuring && measureStart && measureEnd" class="info-item measure-info">
+        <span class="info-label">测距中</span>
+        <span class="info-value measure">
+          距离: {{ calculateDistance(measureStart, measureEnd).toFixed(2) }}
+        </span>
+        <span class="info-value">X: {{ (measureEnd.x - measureStart.x).toFixed(2) }}</span>
+        <span class="info-value">Y: {{ (measureEnd.y - measureStart.y).toFixed(2) }}</span>
+      </div>
+      
+      <!-- 最后经过的顶点 -->
+      <div v-if="lastHoveredVertex" class="info-item vertex-info">
+        <span class="info-label">
           顶点 {{ lastHoveredVertex.vertexIndex + 1 }}
           <span v-if="hoveredVertex && hoveredVertex.geometryId === lastHoveredVertex.geometryId && hoveredVertex.vertexIndex === lastHoveredVertex.vertexIndex" class="active-indicator">●</span>
         </span>
-        <span class="tooltip-coords">
-          X: {{ lastHoveredVertex.point.x.toFixed(2) }}
-        </span>
-        <span class="tooltip-coords">
-          Y: {{ lastHoveredVertex.point.y.toFixed(2) }}
-        </span>
+        <span class="info-value highlight">X: {{ lastHoveredVertex.point.x.toFixed(2) }}</span>
+        <span class="info-value highlight">Y: {{ lastHoveredVertex.point.y.toFixed(2) }}</span>
+      </div>
+
+      <!-- 测距线数量 -->
+      <div v-if="measurements.length > 0" class="info-item">
+        <span class="info-label">测距线</span>
+        <span class="info-value">{{ measurements.length }} 条</span>
+        <span v-if="selectedMeasurementId" class="info-value selected">已选中</span>
+        <span v-else-if="hoveredMeasurementId" class="info-value hover">悬浮中</span>
       </div>
     </div>
 
@@ -511,11 +1059,14 @@ onUnmounted(() => {
         <span class="key">滚轮</span>
         <span>缩放</span>
         <span class="divider">|</span>
-        <span class="key">拖拽</span>
-        <span>移动</span>
+        <span class="key">左键拖拽</span>
+        <span>移动画布</span>
         <span class="divider">|</span>
-        <span class="key">悬停</span>
-        <span>高亮</span>
+        <span class="key">Ctrl+左键</span>
+        <span>测距</span>
+        <span class="divider">|</span>
+        <span class="key">右键</span>
+        <span>取消测距</span>
       </div>
     </div>
   </div>
@@ -541,12 +1092,9 @@ onUnmounted(() => {
   background: #000;
 }
 
-.input-panel {
-  width: 340px;
-}
-
+.input-panel,
 .list-panel {
-  width: 320px;
+  width: 340px;
 }
 
 .input-section {
@@ -790,68 +1338,77 @@ onUnmounted(() => {
   cursor: grabbing;
 }
 
-/* 右上角坐标提示 */
-.coordinate-tooltip {
+/* 右上角信息面板 */
+.info-panel {
   position: absolute;
+  top: 24px;
   right: 24px;
   z-index: 50;
-}
-
-.mouse-tooltip {
-  top: 24px;
-}
-
-.vertex-tooltip {
-  top: 130px;
-}
-
-.tooltip-content {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 12px 16px;
+  gap: 8px;
+}
+
+.info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 14px;
   background: rgba(20, 20, 30, 0.9);
   backdrop-filter: blur(10px);
-  border-radius: 10px;
-  transition: all 0.3s ease;
-  min-width: 140px;
-}
-
-.mouse-tooltip .tooltip-content {
   border: 1px solid rgba(0, 245, 255, 0.3);
+  border-radius: 8px;
   box-shadow: 0 0 20px rgba(0, 245, 255, 0.1);
+  min-width: 120px;
 }
 
-.vertex-tooltip .tooltip-content {
-  border: 1px solid rgba(255, 255, 0, 0.5);
+.info-item.vertex-info {
+  border-color: rgba(255, 255, 0, 0.5);
   box-shadow: 0 0 30px rgba(255, 255, 0, 0.3);
 }
 
-.tooltip-label {
+.info-item.measure-info {
+  border-color: rgba(0, 245, 255, 0.5);
+  box-shadow: 0 0 30px rgba(0, 245, 255, 0.3);
+}
+
+.info-value.measure {
+  color: #00f5ff;
+  font-size: 16px;
+  font-weight: 700;
+  text-shadow: 0 0 10px rgba(0, 245, 255, 0.5);
+}
+
+.info-value.selected {
+  color: #ff00ff;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.6);
+}
+
+.info-value.hover {
+  color: #ffff00;
+  font-size: 11px;
+}
+
+.info-label {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
   text-transform: uppercase;
   letter-spacing: 1px;
-  transition: color 0.3s ease;
 }
 
-.tooltip-label.vertex-active {
-  color: #ffff00;
+.info-value {
+  font-size: 13px;
   font-weight: 600;
-}
-
-.tooltip-coords {
-  font-size: 14px;
-  font-weight: 600;
-  font-family: 'JetBrains Mono', monospace;
-  transition: color 0.3s ease;
-}
-
-.mouse-tooltip .tooltip-coords {
   color: #00f5ff;
+  font-family: 'JetBrains Mono', monospace;
 }
 
-.vertex-tooltip .tooltip-coords {
+.info-value.zoom {
+  font-size: 16px;
+  color: #ff00ff;
+}
+
+.info-value.highlight {
   color: #ffff00;
 }
 

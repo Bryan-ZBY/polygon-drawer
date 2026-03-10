@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 interface Props {
   position: { x: number; y: number }
@@ -21,6 +21,7 @@ const emit = defineEmits<{
 // 拖拽状态
 const isDragging = ref(false)
 const dragOffset = ref({ x: 0, y: 0 })
+const panelRef = ref<HTMLElement | null>(null)
 
 // 计算面板样式
 const panelStyle = computed(() => ({
@@ -30,14 +31,16 @@ const panelStyle = computed(() => ({
 
 // 开始拖拽
 const startDrag = (e: MouseEvent) => {
-  // 只有点击标题栏才拖拽
-  if ((e.target as HTMLElement).closest('.panel-header')) {
+  // 只有点击标题栏或拖拽把手才拖拽
+  const target = e.target as HTMLElement
+  if (target.closest('.panel-header') || target.closest('.drag-handle')) {
     isDragging.value = true
     dragOffset.value = {
       x: e.clientX - props.position.x,
       y: e.clientY - props.position.y
     }
     e.preventDefault()
+    e.stopPropagation()
   }
 }
 
@@ -48,13 +51,13 @@ const onDrag = (e: MouseEvent) => {
   const newX = e.clientX - dragOffset.value.x
   const newY = e.clientY - dragOffset.value.y
   
-  // 限制在视口内
-  const maxX = window.innerWidth - 100
-  const maxY = window.innerHeight - 50
+  // 限制在视口内（允许部分超出）
+  const maxX = window.innerWidth - 50
+  const maxY = window.innerHeight - 30
   
   emit('update:position', {
-    x: Math.max(0, Math.min(newX, maxX)),
-    y: Math.max(0, Math.min(newY, maxY))
+    x: Math.max(-200, Math.min(newX, maxX)),
+    y: Math.max(-50, Math.min(newY, maxY))
   })
 }
 
@@ -67,19 +70,30 @@ const endDrag = () => {
 const toggleCollapse = () => {
   emit('update:collapsed', !props.collapsed)
 }
+
+// 全局事件监听
+onMounted(() => {
+  window.addEventListener('mousemove', onDrag)
+  window.addEventListener('mouseup', endDrag)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('mousemove', onDrag)
+  window.removeEventListener('mouseup', endDrag)
+})
 </script>
 
 <template>
   <div
+    ref="panelRef"
     class="draggable-panel"
     :style="panelStyle"
     :class="{ dragging: isDragging, collapsed: collapsed }"
-    @mousedown="startDrag"
   >
     <!-- 标题栏 -->
-    <div class="panel-header">
+    <div class="panel-header" @mousedown="startDrag">
       <div class="header-left">
-        <span class="drag-handle">⋮⋮</span>
+        <span class="drag-handle" @mousedown.stop>⋮⋮</span>
         <span class="panel-title">{{ title }}</span>
         <span v-if="badge > 0" class="panel-badge">{{ badge }}</span>
       </div>
@@ -120,7 +134,7 @@ const toggleCollapse = () => {
   box-shadow:
     0 35px 60px -15px rgba(0, 0, 0, 0.6),
     0 0 0 1px rgba(0, 245, 255, 0.2) inset;
-  cursor: grabbing;
+  z-index: 1000;
 }
 
 .draggable-panel.collapsed {
@@ -157,6 +171,14 @@ const toggleCollapse = () => {
   color: rgba(255, 255, 255, 0.3);
   letter-spacing: 2px;
   cursor: grab;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.drag-handle:hover {
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .panel-title {

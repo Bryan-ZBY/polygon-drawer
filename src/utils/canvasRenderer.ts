@@ -70,7 +70,7 @@ export const screenToWorld = (
   }
 }
 
-// 绘制网格
+// 绘制网格 - 简化版本，减少绘制调用
 export const drawGrid = (
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -86,47 +86,36 @@ export const drawGrid = (
   const startX = centerX % screenGridSize
   const startY = centerY % screenGridSize
   
-  ctx.strokeStyle = 'rgba(0, 245, 255, 0.08)'
+  // 批量绘制竖线
+  ctx.strokeStyle = 'rgba(0, 245, 255, 0.06)'
   ctx.lineWidth = 1
-  
+  ctx.beginPath()
   for (let x = startX; x <= width; x += screenGridSize) {
-    ctx.beginPath()
     ctx.moveTo(x, 0)
     ctx.lineTo(x, height)
-    ctx.stroke()
   }
+  ctx.stroke()
   
+  // 批量绘制横线
+  ctx.beginPath()
   for (let y = startY; y <= height; y += screenGridSize) {
-    ctx.beginPath()
     ctx.moveTo(0, y)
     ctx.lineTo(width, y)
-    ctx.stroke()
   }
+  ctx.stroke()
   
-  ctx.fillStyle = 'rgba(0, 245, 255, 0.03)'
-  const dotSpacing = screenGridSize / 5
-  for (let x = startX; x <= width; x += dotSpacing) {
-    for (let y = startY; y <= height; y += dotSpacing) {
-      ctx.fillRect(x - 1, y - 1, 2, 2)
-    }
-  }
-  
+  // 简化原点标记
   const originX = width / 2 + viewState.offsetX
   const originY = height / 2 + viewState.offsetY
   
-  ctx.strokeStyle = 'rgba(0, 245, 255, 0.3)'
-  ctx.lineWidth = 2
+  ctx.strokeStyle = 'rgba(0, 245, 255, 0.2)'
+  ctx.lineWidth = 1
   ctx.beginPath()
   ctx.moveTo(originX, 0)
   ctx.lineTo(originX, height)
   ctx.moveTo(0, originY)
   ctx.lineTo(width, originY)
   ctx.stroke()
-  
-  ctx.beginPath()
-  ctx.arc(originX, originY, 4, 0, Math.PI * 2)
-  ctx.fillStyle = '#00f5ff'
-  ctx.fill()
 }
 
 // 检查点是否在多边形内（射线法）
@@ -148,7 +137,7 @@ export const distance = (p1: Point, p2: Point): number => {
   return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2))
 }
 
-// 绘制多边形 - 支持多种状态
+// 绘制多边形 - 性能优化版本
 export const drawPolygon = (
   ctx: CanvasRenderingContext2D,
   polygon: Polygon,
@@ -180,24 +169,15 @@ export const drawPolygon = (
   })
   ctx.closePath()
   
-  // 根据状态绘制
+  // 根据状态绘制 - 简化效果以提升性能
   if (isHovered || isSelected) {
-    // 悬停或选中时：填充 + 发光
-    const glowIntensity = isSelected ? 30 : 20
-    ctx.shadowColor = polygon.color
-    ctx.shadowBlur = glowIntensity
-    ctx.shadowOffsetX = 0
-    ctx.shadowOffsetY = 0
-    
-    // 均匀填充
-    ctx.fillStyle = hexToRgba(polygon.color, 0.25)
+    // 填充 - 不使用阴影
+    ctx.fillStyle = hexToRgba(polygon.color, 0.2)
     ctx.fill()
     
-    ctx.shadowBlur = 0
-    
-    // 边框加粗
+    // 边框
     ctx.strokeStyle = polygon.color
-    ctx.lineWidth = isSelected ? 3 : 2.5
+    ctx.lineWidth = isSelected ? 2.5 : 2
     ctx.stroke()
   } else {
     // 默认状态：仅轮廓
@@ -212,67 +192,39 @@ export const drawPolygon = (
       const isThisVertexHovered = hoveredVertexIndex === i
       
       if (isThisVertexHovered) {
-        // 悬停的顶点：特殊高亮效果
-        // 外发光圈
-        ctx.shadowColor = '#ffff00'
-        ctx.shadowBlur = 20
+        // 悬停的顶点：简化高亮效果
         ctx.beginPath()
-        ctx.arc(p.x, p.y, 10, 0, Math.PI * 2)
-        ctx.fillStyle = 'rgba(255, 255, 0, 0.3)'
-        ctx.fill()
-        ctx.shadowBlur = 0
-        
-        // 内圈 - 黄色
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2)
+        ctx.arc(p.x, p.y, 8, 0, Math.PI * 2)
         ctx.fillStyle = '#ffff00'
         ctx.fill()
         
-        // 中心白点
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, 5, 0, Math.PI * 2)
+        ctx.fillStyle = '#ffffff'
+        ctx.fill()
+      } else {
+        // 普通顶点 - 简化效果
         ctx.beginPath()
         ctx.arc(p.x, p.y, 4, 0, Math.PI * 2)
         ctx.fillStyle = '#ffffff'
         ctx.fill()
         
-        // 外边框
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, 7, 0, Math.PI * 2)
-        ctx.strokeStyle = '#ffffff'
-        ctx.lineWidth = 2
-        ctx.stroke()
-      } else {
-        // 普通顶点
-        ctx.shadowColor = polygon.color
-        ctx.shadowBlur = 10
-        
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, 5, 0, Math.PI * 2)
-        ctx.fillStyle = '#ffffff'
-        ctx.fill()
-        
-        ctx.shadowBlur = 0
-        
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, 5, 0, Math.PI * 2)
         ctx.strokeStyle = polygon.color
-        ctx.lineWidth = 2
+        ctx.lineWidth = 1.5
         ctx.stroke()
       }
       
-      // 绘制序号
+      // 绘制序号 - 简化效果
       ctx.fillStyle = isThisVertexHovered ? '#ffff00' : '#ffffff'
-      ctx.font = isThisVertexHovered ? 'bold 12px Inter, sans-serif' : 'bold 10px Inter, sans-serif'
-      ctx.shadowColor = 'rgba(0,0,0,0.8)'
-      ctx.shadowBlur = 3
-      ctx.fillText(`${i + 1}`, p.x + 10, p.y - 10)
-      ctx.shadowBlur = 0
+      ctx.font = isThisVertexHovered ? 'bold 11px sans-serif' : '10px sans-serif'
+      ctx.fillText(`${i + 1}`, p.x + 8, p.y - 8)
     })
   }
   
   return { screenPoints }
 }
 
-// 检测鼠标位置对应的多边形和顶点
+// 检测鼠标位置对应的多边形和顶点 - 优化版本
 export const detectHover = (
   mouseX: number,
   mouseY: number,
@@ -299,16 +251,14 @@ export const detectHover = (
     if (geometry.type === GeometryType.POLYGON) {
       const polygon = geometry as Polygon
       
-      // 检测顶点悬停
+      // 检测顶点悬停 - 使用平方距离避免开方运算
       polygon.points.forEach((p, idx) => {
         const screenP = worldToScreen(p, viewState, canvasWidth, canvasHeight)
-        const dist = Math.sqrt(
-          Math.pow(screenP.x - mouseX, 2) + Math.pow(screenP.y - mouseY, 2)
-        )
+        const distSq = Math.pow(screenP.x - mouseX, 2) + Math.pow(screenP.y - mouseY, 2)
         
-        // 顶点检测阈值：15像素
-        if (dist < 15 && dist < minVertexDistance) {
-          minVertexDistance = dist
+        // 顶点检测阈值：15像素（平方为225）
+        if (distSq < 225 && distSq < minVertexDistance) {
+          minVertexDistance = distSq
           hoveredVertex = {
             geometryId: geometry.id,
             vertexIndex: idx,
@@ -320,7 +270,6 @@ export const detectHover = (
       // 检测多边形内部悬停（如果还没有检测到顶点）
       if (!hoveredVertex && isPointInPolygon(worldMouse, polygon.points)) {
         hoveredGeometryId = geometry.id
-        // 继续遍历，但记录这个悬停，可能被上层的多边形覆盖
       }
     }
   }
@@ -333,7 +282,7 @@ export const detectHover = (
   return { hoveredGeometryId, hoveredVertex }
 }
 
-// 绘制线段
+// 绘制线段 - 简化版本
 export const drawLine = (
   ctx: CanvasRenderingContext2D,
   line: Line,
@@ -346,32 +295,27 @@ export const drawLine = (
   const start = worldToScreen(line.start, viewState, canvasWidth, canvasHeight)
   const end = worldToScreen(line.end, viewState, canvasWidth, canvasHeight)
   
-  ctx.shadowColor = line.color
-  ctx.shadowBlur = (isHovered || isSelected) ? 15 : 0
-  
   ctx.beginPath()
   ctx.moveTo(start.x, start.y)
   ctx.lineTo(end.x, end.y)
   ctx.strokeStyle = line.color
-  ctx.lineWidth = (isHovered || isSelected) ? 3 : 1.5
+  ctx.lineWidth = (isHovered || isSelected) ? 2.5 : 1.5
   ctx.stroke()
   
-  ctx.shadowBlur = 0
-  
   if (isHovered || isSelected) {
-    [start, end].forEach((p, i) => {
+    [start, end].forEach(p => {
       ctx.beginPath()
-      ctx.arc(p.x, p.y, 5, 0, Math.PI * 2)
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2)
       ctx.fillStyle = '#ffffff'
       ctx.fill()
       ctx.strokeStyle = line.color
-      ctx.lineWidth = 2
+      ctx.lineWidth = 1.5
       ctx.stroke()
     })
   }
 }
 
-// 绘制圆形
+// 绘制圆形 - 简化版本
 export const drawCircle = (
   ctx: CanvasRenderingContext2D,
   circle: Circle,
@@ -384,35 +328,30 @@ export const drawCircle = (
   const center = worldToScreen(circle.center, viewState, canvasWidth, canvasHeight)
   const radius = circle.radius * viewState.scale
   
-  ctx.shadowColor = circle.color
-  ctx.shadowBlur = (isHovered || isSelected) ? 20 : 0
-  
   ctx.beginPath()
   ctx.arc(center.x, center.y, radius, 0, Math.PI * 2)
   
   if (isHovered || isSelected) {
-    ctx.fillStyle = hexToRgba(circle.color, 0.25)
+    ctx.fillStyle = hexToRgba(circle.color, 0.2)
     ctx.fill()
   }
   
   ctx.strokeStyle = circle.color
-  ctx.lineWidth = (isHovered || isSelected) ? 3 : 1.5
+  ctx.lineWidth = (isHovered || isSelected) ? 2.5 : 1.5
   ctx.stroke()
-  
-  ctx.shadowBlur = 0
   
   if (isHovered || isSelected) {
     ctx.beginPath()
-    ctx.arc(center.x, center.y, 5, 0, Math.PI * 2)
+    ctx.arc(center.x, center.y, 4, 0, Math.PI * 2)
     ctx.fillStyle = '#ffffff'
     ctx.fill()
     ctx.strokeStyle = circle.color
-    ctx.lineWidth = 2
+    ctx.lineWidth = 1.5
     ctx.stroke()
   }
 }
 
-// 绘制矩形
+// 绘制矩形 - 简化版本
 export const drawRectangle = (
   ctx: CanvasRenderingContext2D,
   rect: Rectangle,
@@ -426,19 +365,14 @@ export const drawRectangle = (
   const width = rect.width * viewState.scale
   const height = rect.height * viewState.scale
   
-  ctx.shadowColor = rect.color
-  ctx.shadowBlur = (isHovered || isSelected) ? 20 : 0
-  
   if (isHovered || isSelected) {
-    ctx.fillStyle = hexToRgba(rect.color, 0.25)
+    ctx.fillStyle = hexToRgba(rect.color, 0.2)
     ctx.fillRect(topLeft.x, topLeft.y, width, height)
   }
   
   ctx.strokeStyle = rect.color
-  ctx.lineWidth = (isHovered || isSelected) ? 3 : 1.5
+  ctx.lineWidth = (isHovered || isSelected) ? 2.5 : 1.5
   ctx.strokeRect(topLeft.x, topLeft.y, width, height)
-  
-  ctx.shadowBlur = 0
   
   if (isHovered || isSelected) {
     const corners = [
@@ -450,11 +384,11 @@ export const drawRectangle = (
     
     corners.forEach(p => {
       ctx.beginPath()
-      ctx.arc(p.x, p.y, 5, 0, Math.PI * 2)
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2)
       ctx.fillStyle = '#ffffff'
       ctx.fill()
       ctx.strokeStyle = rect.color
-      ctx.lineWidth = 2
+      ctx.lineWidth = 1.5
       ctx.stroke()
     })
   }

@@ -10,6 +10,7 @@ export enum GeometryType {
   LINE = 'line',
   CIRCLE = 'circle',
   RECTANGLE = 'rectangle',
+  MEASUREMENT = 'measurement',
   // 可扩展更多类型
 }
 
@@ -51,8 +52,16 @@ export interface Rectangle extends BaseGeometry {
   height: number
 }
 
+// 测距线
+export interface Measurement extends BaseGeometry {
+  type: GeometryType.MEASUREMENT
+  start: Point
+  end: Point
+  distance: number
+}
+
 // 联合类型
-export type Geometry = Polygon | Line | Circle | Rectangle
+export type Geometry = Polygon | Line | Circle | Rectangle | Measurement
 
 // 视图状态
 export interface ViewState {
