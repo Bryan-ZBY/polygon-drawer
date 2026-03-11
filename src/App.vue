@@ -15,6 +15,7 @@ import { generateNonOverlappingPolygon } from '@/utils/geometryGenerator'
 import DraggablePanel from '@/components/DraggablePanel.vue'
 import GeometryList from '@/components/GeometryList.vue'
 import RealtimeInput from '@/components/RealtimeInput.vue'
+import MarkdownViewer from '@/components/MarkdownViewer.vue'
 
 // 状态
 const geometries = ref<Geometry[]>([])
@@ -116,6 +117,28 @@ const editingName = ref('')
 // 面板折叠状态
 const isListCollapsed = ref(false)
 const isInputCollapsed = ref(false)
+
+// 文档弹窗状态
+const showDocsModal = ref(false)
+const readmeContent = ref('')
+
+// 加载 README.md 内容
+const loadReadme = async () => {
+  try {
+    const response = await fetch('/README.md')
+    if (response.ok) {
+      readmeContent.value = await response.text()
+    }
+  } catch (e) {
+    console.error('Failed to load README:', e)
+    readmeContent.value = '# 说明文档加载失败\n\n请刷新页面重试。'
+  }
+}
+
+// 在挂载时加载 README
+onMounted(() => {
+  loadReadme()
+})
 
 // 从 localStorage 读取位置
 const loadPanelPositions = () => {
@@ -1914,6 +1937,40 @@ onUnmounted(() => {
         <span>移动画布</span>
       </div>
     </div>
+
+    <!-- 说明文档入口 -->
+    <button 
+      class="docs-link"
+      title="查看说明文档"
+      @click="showDocsModal = true"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+        <polyline points="14 2 14 8 20 8"></polyline>
+        <line x1="16" y1="13" x2="8" y2="13"></line>
+        <line x1="16" y1="17" x2="8" y2="17"></line>
+        <polyline points="10 9 9 9 8 9"></polyline>
+      </svg>
+      <span>说明文档</span>
+    </button>
+
+    <!-- 说明文档弹窗 -->
+    <div v-if="showDocsModal" class="docs-modal-overlay" @click="showDocsModal = false">
+      <div class="docs-modal" @click.stop>
+        <div class="docs-modal-header">
+          <h2>📖 说明文档</h2>
+          <button class="docs-close-btn" @click="showDocsModal = false">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="docs-modal-content">
+          <MarkdownViewer :content="readmeContent" />
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -2330,5 +2387,129 @@ onUnmounted(() => {
 
 .divider {
   color: rgba(255, 255, 255, 0.2);
+}
+
+/* 说明文档入口 */
+.docs-link {
+  position: absolute;
+  bottom: 24px;
+  left: 24px;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(20, 20, 30, 0.8);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.7);
+  text-decoration: none;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.docs-link:hover {
+  background: rgba(30, 30, 45, 0.9);
+  border-color: rgba(0, 245, 255, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4), 0 0 15px rgba(0, 245, 255, 0.1);
+}
+
+.docs-link svg {
+  color: #00f5ff;
+  filter: drop-shadow(0 0 4px rgba(0, 245, 255, 0.3));
+}
+
+/* 说明文档弹窗 */
+.docs-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+}
+
+.docs-modal {
+  width: 90%;
+  max-width: 1000px;
+  height: 85vh;
+  background: rgba(15, 20, 30, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  box-shadow: 0 25px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(0, 245, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.docs-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.docs-modal-header h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #fff;
+  margin: 0;
+}
+
+.docs-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.docs-close-btn:hover {
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.4);
+  color: #ff6b6b;
+}
+
+.docs-modal-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px;
+}
+
+/* 弹窗内的滚动条 */
+.docs-modal-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.docs-modal-content::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 4px;
+}
+
+.docs-modal-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+.docs-modal-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
 }
 </style>
