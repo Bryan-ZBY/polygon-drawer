@@ -32,7 +32,8 @@ const isMeasuring = ref(false)
 const measureStart = ref<Point | null>(null)
 const measureEnd = ref<Point | null>(null)
 const snappedPoint = ref<Point | null>(null)
-const snapType = ref<'none' | 'vertex' | 'edge'>('none')
+const snapType = ref<'none' | 'vertex' | 'edge' | 'axis' | 'edge-axis'>('none')
+const isMeasurePending = ref(false)  // 松开Ctrl后等待左键确认的测距状态
 
 // 已完成的测距线列表
 const measurements = ref<Array<{ id: string; start: Point; end: Point; distance: number }>>([])
@@ -76,7 +77,13 @@ const viewState = ref<ViewState>({
 
 // 拖拽状态
 const isDragging = ref(false)
+const isRightDragging = ref(false)  // 右键拖动状态
+const isMeasureDragging = ref(false)  // 测距时左键拖动状态
+const canMeasureDrag = ref(false)  // 是否可以拖动（需要重新按下左键）
 const lastMousePos = ref({ x: 0, y: 0 })
+const measureDragStartPos = ref({ x: 0, y: 0 })  // 测距时左键按下的位置
+const lastClickTime = ref(0)  // 上次左键点击时间，用于检测双击
+const DOUBLE_CLICK_DELAY = 300  // 双击间隔阈值（毫秒）
 
 // 重命名状态
 const editingNameId = ref<string | null>(null)
@@ -187,13 +194,46 @@ const drawAll = () => {
   // 绘制吸附点
   if (snappedPoint.value && snapType.value !== 'none') {
     const screenPos = worldToScreen(snappedPoint.value)
-    ctx.beginPath()
-    ctx.arc(screenPos.x, screenPos.y, 8, 0, Math.PI * 2)
-    ctx.fillStyle = snapType.value === 'vertex' ? 'rgba(255, 255, 0, 0.5)' : 'rgba(0, 255, 136, 0.5)'
-    ctx.fill()
-    ctx.strokeStyle = snapType.value === 'vertex' ? '#ffff00' : '#00ff88'
-    ctx.lineWidth = 2
-    ctx.stroke()
+
+    if (snapType.value === 'axis' || snapType.value === 'edge-axis') {
+      // 轴吸附或边+轴吸附：绘制十字线
+      ctx.strokeStyle = '#ff6b6b'
+      ctx.lineWidth = 1
+      ctx.setLineDash([3, 3])
+
+      // 水平线
+      ctx.beginPath()
+      ctx.moveTo(0, screenPos.y)
+      ctx.lineTo(canvas.width, screenPos.y)
+      ctx.stroke()
+
+      // 垂直线
+      ctx.beginPath()
+      ctx.moveTo(screenPos.x, 0)
+      ctx.lineTo(screenPos.x, canvas.height)
+      ctx.stroke()
+
+      ctx.setLineDash([])
+
+      // 边+轴吸附：使用边的颜色（绿色），普通轴吸附使用红色
+      const isEdgeAxis = snapType.value === 'edge-axis'
+      ctx.beginPath()
+      ctx.arc(screenPos.x, screenPos.y, isEdgeAxis ? 8 : 6, 0, Math.PI * 2)
+      ctx.fillStyle = isEdgeAxis ? 'rgba(0, 255, 136, 0.5)' : 'rgba(255, 107, 107, 0.5)'
+      ctx.fill()
+      ctx.strokeStyle = isEdgeAxis ? '#00ff88' : '#ff6b6b'
+      ctx.lineWidth = 2
+      ctx.stroke()
+    } else {
+      // 顶点或边吸附
+      ctx.beginPath()
+      ctx.arc(screenPos.x, screenPos.y, 8, 0, Math.PI * 2)
+      ctx.fillStyle = snapType.value === 'vertex' ? 'rgba(255, 255, 0, 0.5)' : 'rgba(0, 255, 136, 0.5)'
+      ctx.fill()
+      ctx.strokeStyle = snapType.value === 'vertex' ? '#ffff00' : '#00ff88'
+      ctx.lineWidth = 2
+      ctx.stroke()
+    }
   }
 
   // 绘制测距线
@@ -201,11 +241,17 @@ const drawAll = () => {
     const start = worldToScreen(measureStart.value)
     const end = worldToScreen(measureEnd.value)
 
+    // 待确认状态下使用不同的颜色
+    const lineColor = isMeasurePending.value ? '#ffff00' : '#00f5ff'
+    const labelBgColor = isMeasurePending.value ? 'rgba(255, 255, 0, 0.2)' : 'rgba(0, 245, 255, 0.2)'
+    const labelBorderColor = isMeasurePending.value ? 'rgba(255, 255, 0, 0.5)' : 'rgba(0, 245, 255, 0.5)'
+    const labelTextColor = isMeasurePending.value ? '#ffff00' : '#00f5ff'
+
     // 绘制测距线
     ctx.beginPath()
     ctx.moveTo(start.x, start.y)
     ctx.lineTo(end.x, end.y)
-    ctx.strokeStyle = '#00f5ff'
+    ctx.strokeStyle = lineColor
     ctx.lineWidth = 2
     ctx.setLineDash([5, 5])
     ctx.stroke()
@@ -237,8 +283,8 @@ const drawAll = () => {
     ctx.font = 'bold 14px "JetBrains Mono", monospace'
     const textWidth = ctx.measureText(label).width
 
-    ctx.fillStyle = 'rgba(0, 245, 255, 0.2)'
-    ctx.strokeStyle = 'rgba(0, 245, 255, 0.5)'
+    ctx.fillStyle = labelBgColor
+    ctx.strokeStyle = labelBorderColor
     ctx.lineWidth = 1
     ctx.beginPath()
     ctx.roundRect(midX - textWidth / 2 - 8, midY - 12, textWidth + 16, 24, 4)
@@ -246,10 +292,25 @@ const drawAll = () => {
     ctx.stroke()
 
     // 绘制距离标签文字
-    ctx.fillStyle = '#00f5ff'
+    ctx.fillStyle = labelTextColor
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(label, midX, midY)
+
+    // 待确认状态下显示提示文字
+    if (isMeasurePending.value) {
+      ctx.font = '12px "Inter", sans-serif'
+      const hintText = '点击左键确认终点'
+      const hintWidth = ctx.measureText(hintText).width
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
+      ctx.beginPath()
+      ctx.roundRect(midX - hintWidth / 2 - 6, midY + 16, hintWidth + 12, 18, 4)
+      ctx.fill()
+      ctx.fillStyle = '#ffff00'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(hintText, midX, midY + 25)
+    }
   }
 
   // 绘制已保存的测距线
@@ -267,7 +328,7 @@ const drawAll = () => {
       ctx.strokeStyle = '#ffff00'
       ctx.lineWidth = 3
     } else if (isSelected) {
-      ctx.strokeStyle = '#ff00ff'
+      ctx.strokeStyle = '#ff6b6b'
       ctx.lineWidth = 3
     } else {
       ctx.strokeStyle = '#00f5ff'
@@ -285,7 +346,7 @@ const drawAll = () => {
     if (isHovered) {
       ctx.strokeStyle = '#ffff00'
     } else if (isSelected) {
-      ctx.strokeStyle = '#ff00ff'
+      ctx.strokeStyle = '#ff6b6b'
     } else {
       ctx.strokeStyle = '#fff'
     }
@@ -300,7 +361,7 @@ const drawAll = () => {
     if (isHovered) {
       ctx.strokeStyle = '#ffff00'
     } else if (isSelected) {
-      ctx.strokeStyle = '#ff00ff'
+      ctx.strokeStyle = '#ff6b6b'
     } else {
       ctx.strokeStyle = '#fff'
     }
@@ -352,13 +413,54 @@ const drawAll = () => {
     if (isHovered) {
       ctx.fillStyle = '#ffff00'
     } else if (isSelected) {
-      ctx.fillStyle = '#ff00ff'
+      ctx.fillStyle = '#ff6b6b'
     } else {
       ctx.fillStyle = '#00f5ff'
     }
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(label, labelX, labelY)
+
+    // 如果悬浮，显示端点坐标
+    if (isHovered) {
+      // 起点坐标
+      const startLabel = `(${measurement.start.x.toFixed(1)}, ${measurement.start.y.toFixed(1)})`
+      const endLabel = `(${measurement.end.x.toFixed(1)}, ${measurement.end.y.toFixed(1)})`
+
+      ctx.font = '11px "JetBrains Mono", monospace'
+      const startLabelWidth = ctx.measureText(startLabel).width
+      const endLabelWidth = ctx.measureText(endLabel).width
+
+      // 绘制起点坐标背景
+      ctx.fillStyle = 'rgba(0, 255, 136, 0.3)'
+      ctx.strokeStyle = 'rgba(0, 255, 136, 0.6)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(start.x - startLabelWidth / 2 - 4, start.y - 22, startLabelWidth + 8, 16, 4)
+      ctx.fill()
+      ctx.stroke()
+
+      // 绘制起点坐标文字
+      ctx.fillStyle = '#00ff88'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(startLabel, start.x, start.y - 14)
+
+      // 绘制终点坐标背景
+      ctx.fillStyle = 'rgba(255, 107, 107, 0.3)'
+      ctx.strokeStyle = 'rgba(255, 107, 107, 0.6)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(end.x - endLabelWidth / 2 - 4, end.y - 22, endLabelWidth + 8, 16, 4)
+      ctx.fill()
+      ctx.stroke()
+
+      // 绘制终点坐标文字
+      ctx.fillStyle = '#ff6b6b'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(endLabel, end.x, end.y - 14)
+    }
 
     // 如果悬浮或选中，绘制删除按钮
     if (isHovered || isSelected) {
@@ -469,48 +571,99 @@ const detectMeasurementHover = (worldPos: Point): { id: string } | null => {
 }
 
 // 吸附检测
-const detectSnap = (worldPos: Point): { point: Point; type: 'vertex' | 'edge' | 'none' } => {
+const detectSnap = (worldPos: Point): { point: Point; type: 'vertex' | 'edge' | 'axis' | 'edge-axis' | 'none' } => {
   let minDist = Infinity
   let snapPoint = worldPos
-  let snapType: 'vertex' | 'edge' | 'none' = 'none'
-  
+  let snapType: 'vertex' | 'edge' | 'axis' | 'edge-axis' | 'none' = 'none'
+
   // 检测顶点吸附
   for (const geometry of geometries.value) {
     if (!geometry.visible || geometry.type !== 'polygon') continue
-    
+
     const polygon = geometry as Polygon
     for (const point of polygon.points) {
       const dist = Math.sqrt(
-        Math.pow(point.x - worldPos.x, 2) + 
+        Math.pow(point.x - worldPos.x, 2) +
         Math.pow(point.y - worldPos.y, 2)
       )
       const screenDist = dist * viewState.value.scale
-      
+
       if (screenDist < SNAP_THRESHOLD && screenDist < minDist) {
         minDist = screenDist
         snapPoint = point
         snapType = 'vertex'
       }
     }
-    
-    // 检测边吸附
-    if (snapType === 'none') {
+  }
+
+  // 检测边吸附（顶点吸附优先）
+  let edgeSnapPoint: Point | null = null
+  let edgeMinDist = Infinity
+  if (snapType === 'none') {
+    for (const geometry of geometries.value) {
+      if (!geometry.visible || geometry.type !== 'polygon') continue
+
+      const polygon = geometry as Polygon
       const points = polygon.points
       for (let i = 0; i < points.length; i++) {
         const a = points[i]
         const b = points[(i + 1) % points.length]
         const { distance, closestPoint } = pointToSegmentDistance(worldPos, a, b)
         const screenDist = distance * viewState.value.scale
-        
-        if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < minDist) {
-          minDist = screenDist
-          snapPoint = closestPoint
-          snapType = 'edge'
+
+        if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < edgeMinDist) {
+          edgeMinDist = screenDist
+          edgeSnapPoint = closestPoint
         }
       }
     }
+    if (edgeSnapPoint) {
+      snapPoint = edgeSnapPoint
+      snapType = 'edge'
+      minDist = edgeMinDist
+    }
   }
-  
+
+  // 测距时检测水平/垂直轴吸附
+  if (isMeasuring.value && measureStart.value) {
+    const AXIS_SNAP_THRESHOLD = 10 / viewState.value.scale // 10像素的轴吸附阈值
+    const start = measureStart.value
+
+    // 检测水平轴吸附（Y坐标相同）
+    const yDist = Math.abs(worldPos.y - start.y)
+    if (yDist < AXIS_SNAP_THRESHOLD) {
+      const axisSnapPoint = { x: worldPos.x, y: start.y }
+      const yScreenDist = yDist * viewState.value.scale
+
+      if (snapType === 'edge' && edgeSnapPoint) {
+        // 边吸附和水平轴吸附同时满足：将边吸附点投影到水平轴上
+        snapPoint = { x: edgeSnapPoint.x, y: start.y }
+        snapType = 'edge-axis'
+      } else if (yScreenDist < minDist) {
+        minDist = yScreenDist
+        snapPoint = axisSnapPoint
+        snapType = 'axis'
+      }
+    }
+
+    // 检测垂直轴吸附（X坐标相同）
+    const xDist = Math.abs(worldPos.x - start.x)
+    if (xDist < AXIS_SNAP_THRESHOLD) {
+      const axisSnapPoint = { x: start.x, y: worldPos.y }
+      const xScreenDist = xDist * viewState.value.scale
+
+      if (snapType === 'edge' && edgeSnapPoint) {
+        // 边吸附和垂直轴吸附同时满足：将边吸附点投影到垂直轴上
+        snapPoint = { x: start.x, y: edgeSnapPoint.y }
+        snapType = 'edge-axis'
+      } else if (xScreenDist < minDist) {
+        minDist = xScreenDist
+        snapPoint = axisSnapPoint
+        snapType = 'axis'
+      }
+    }
+  }
+
   return { point: snapPoint, type: snapType }
 }
 
@@ -586,7 +739,7 @@ const handleMouseMove = (e: MouseEvent) => {
   // 更新鼠标位置
   mousePos.value = newMousePos
 
-  // 处理拖拽
+  // 处理左键拖拽（包括测距时）
   let dragChanged = false
   if (isDragging.value) {
     const deltaX = e.clientX - lastMousePos.value.x
@@ -601,9 +754,58 @@ const handleMouseMove = (e: MouseEvent) => {
     lastMousePos.value = { x: e.clientX, y: e.clientY }
   }
 
+  // 处理测距时的左键拖动（移动超过5像素视为拖动）
+  if (isMeasuring.value && canMeasureDrag.value && e.buttons === 1) {
+    if (!isMeasureDragging.value) {
+      const deltaX = e.clientX - measureDragStartPos.value.x
+      const deltaY = e.clientY - measureDragStartPos.value.y
+      if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+        isMeasureDragging.value = true
+      }
+    }
+
+    if (isMeasureDragging.value) {
+      const deltaX = e.clientX - lastMousePos.value.x
+      const deltaY = e.clientY - lastMousePos.value.y
+
+      if (deltaX !== 0 || deltaY !== 0) {
+        viewState.value.offsetX += deltaX
+        viewState.value.offsetY += deltaY
+        dragChanged = true
+      }
+
+      lastMousePos.value = { x: e.clientX, y: e.clientY }
+    }
+  }
+
+  // 处理右键拖拽（测距时也可以移动画布）
+  if (e.buttons === 2) {
+    // 检测是否开始右键拖动（移动超过5像素视为拖动）
+    if (!isRightDragging.value) {
+      const deltaX = e.clientX - lastMousePos.value.x
+      const deltaY = e.clientY - lastMousePos.value.y
+      if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+        isRightDragging.value = true
+      }
+    }
+
+    if (isRightDragging.value) {
+      const deltaX = e.clientX - lastMousePos.value.x
+      const deltaY = e.clientY - lastMousePos.value.y
+
+      if (deltaX !== 0 || deltaY !== 0) {
+        viewState.value.offsetX += deltaX
+        viewState.value.offsetY += deltaY
+        dragChanged = true
+      }
+
+      lastMousePos.value = { x: e.clientX, y: e.clientY }
+    }
+  }
+
   // 检测测距线悬浮 - 只有检测到新的悬浮时才更新，移出时不清空
   let measurementHoverChanged = false
-  if (!isMeasuring.value && !isDragging.value) {
+  if (!isMeasuring.value && !isDragging.value && !isRightDragging.value) {
     const hoveredMeasurement = detectMeasurementHover(worldPos)
     if (hoveredMeasurement?.id) {
       // 只有悬浮到新的测距线时才更新
@@ -616,7 +818,7 @@ const handleMouseMove = (e: MouseEvent) => {
   }
 
   // 只有在需要时才调度重绘
-  if (snapChanged || measureChanged || hoverChanged || vertexChanged || lastVertexChanged || dragChanged || isDragging.value || isMeasuring.value || measurementHoverChanged) {
+  if (snapChanged || measureChanged || hoverChanged || vertexChanged || lastVertexChanged || dragChanged || isDragging.value || isRightDragging.value || isMeasuring.value || measurementHoverChanged) {
     scheduleDraw()
   }
 }
@@ -638,7 +840,7 @@ const handleMouseDown = (e: MouseEvent) => {
   }
 
   if (e.button === 0) {
-    // 左键：拖动画布 或 Ctrl+左键测距
+    // 左键：拖动画布 或 Ctrl+左键测距 或 双击测距
     e.preventDefault()
 
     // 检测是否点击了删除按钮
@@ -661,8 +863,14 @@ const handleMouseDown = (e: MouseEvent) => {
       return
     }
 
-    if (e.ctrlKey) {
-      // Ctrl+左键：测距
+    // 检测双击
+    const now = Date.now()
+    const isDoubleClick = now - lastClickTime.value < DOUBLE_CLICK_DELAY
+    lastClickTime.value = now
+
+    // 双击 或 Ctrl+左键：开始测距或结束测距
+    if (isDoubleClick || e.ctrlKey) {
+      // Ctrl+左键：开始测距或结束测距
       selectedMeasurementId.value = null
       measurementDeleteBtnPos.value = null
 
@@ -673,8 +881,11 @@ const handleMouseDown = (e: MouseEvent) => {
       if (!isMeasuring.value) {
         // 开始测距
         isMeasuring.value = true
+        isMeasurePending.value = false
         measureStart.value = finalPoint
         measureEnd.value = finalPoint
+        // 刚开始测距时不能拖动，需要等松开左键后重新按下
+        canMeasureDrag.value = false
       } else {
         // 结束测距，保存到列表
         if (measureStart.value) {
@@ -687,42 +898,75 @@ const handleMouseDown = (e: MouseEvent) => {
           })
         }
         isMeasuring.value = false
+        isMeasurePending.value = false
         measureStart.value = null
         measureEnd.value = null
         scheduleDraw()
       }
+    } else if (isMeasuring.value && isMeasurePending.value) {
+      // 待确认状态下左键按下：允许拖动
+      measureDragStartPos.value = { x: e.clientX, y: e.clientY }
+      isMeasureDragging.value = false
+      canMeasureDrag.value = true
+      lastMousePos.value = { x: e.clientX, y: e.clientY }
+    } else if (isMeasuring.value && !isMeasurePending.value) {
+      // 测距中（非待确认状态）：记录按下位置，用于区分单击和拖动
+      measureDragStartPos.value = { x: e.clientX, y: e.clientY }
+      isMeasureDragging.value = false
+      canMeasureDrag.value = true
+      lastMousePos.value = { x: e.clientX, y: e.clientY }
     } else {
       // 普通左键：拖动画布
-      // 如果正在测距，左键取消测距
-      if (isMeasuring.value) {
-        isMeasuring.value = false
-        measureStart.value = null
-        measureEnd.value = null
-        scheduleDraw()
-        return
-      }
-
-      // 开始拖拽画布
       isDragging.value = true
       lastMousePos.value = { x: e.clientX, y: e.clientY }
     }
   } else if (e.button === 2) {
-    // 右键：取消测距（如果正在测距）
+    // 右键：单击取消测距，拖动移动画布
     e.preventDefault()
 
-    // 如果正在测距，右键取消
-    if (isMeasuring.value) {
-      isMeasuring.value = false
-      measureStart.value = null
-      measureEnd.value = null
-      scheduleDraw()
-    }
+    // 记录右键按下的位置
+    lastMousePos.value = { x: e.clientX, y: e.clientY }
+    isRightDragging.value = false
   }
 }
 
 // 处理鼠标释放
-const handleMouseUp = () => {
+const handleMouseUp = (e: MouseEvent) => {
   isDragging.value = false
+
+  // 处理左键释放
+  if (e.button === 0) {
+    // 测距中左键释放
+    if (isMeasuring.value) {
+      // 重置测距拖动状态，但不落下终点
+      // 终点只能通过 Ctrl+左键 或 双击左键 落下
+      isMeasureDragging.value = false
+    }
+  }
+
+  // 处理右键释放
+  if (e.button === 2) {
+    if (!isRightDragging.value) {
+      // 右键单击：取消测距（包括待确认状态）
+      if (isMeasuring.value) {
+        isMeasuring.value = false
+        isMeasurePending.value = false
+        measureStart.value = null
+        measureEnd.value = null
+        scheduleDraw()
+      }
+    }
+    isRightDragging.value = false
+  }
+}
+
+// 处理键盘释放 - 松开Ctrl时进入待确认状态
+const handleKeyUp = (e: KeyboardEvent) => {
+  if (e.key === 'Control' && isMeasuring.value && !isMeasurePending.value) {
+    // 松开Ctrl，进入待确认状态，等待左键落下终点
+    isMeasurePending.value = true
+    scheduleDraw()
+  }
 }
 
 // 添加图形
@@ -870,7 +1114,7 @@ const printGeometries = () => {
   console.table(geometryObjects)
   
   // 详细输出每个图形对象
-  console.log('%c详细对象数据:', 'color: #ff00ff; font-size: 12px;')
+  console.log('%c详细对象数据:', 'color: #ff6b6b; font-size: 12px;')
   geometryObjects.forEach((obj, i) => {
     console.log(`%c[${i + 1}] ${obj.name}:`, 'color: #00f5ff; font-weight: bold;', obj)
   })
@@ -927,12 +1171,14 @@ onMounted(() => {
     canvas.addEventListener('mousedown', handleMouseDown)
     canvas.addEventListener('contextmenu', handleContextMenu)
     window.addEventListener('mouseup', handleMouseUp)
+    window.addEventListener('keyup', handleKeyUp)
   }
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', resizeCanvas)
   window.removeEventListener('mouseup', handleMouseUp)
+  window.removeEventListener('keyup', handleKeyUp)
   const canvas = canvasRef.value
   if (canvas) {
     canvas.removeEventListener('contextmenu', handleContextMenu)
@@ -1006,7 +1252,7 @@ onUnmounted(() => {
     <canvas
       ref="canvasRef"
       class="dark-canvas"
-      :class="{ dragging: isDragging }"
+      :class="{ dragging: isDragging, 'measurement-hover': hoveredMeasurementId }"
     />
 
     <!-- 右上角信息面板 -->
@@ -1065,8 +1311,8 @@ onUnmounted(() => {
         <span class="key">Ctrl+左键</span>
         <span>测距</span>
         <span class="divider">|</span>
-        <span class="key">右键</span>
-        <span>取消测距</span>
+        <span class="key">右键拖拽</span>
+        <span>移动画布</span>
       </div>
     </div>
   </div>
@@ -1216,20 +1462,20 @@ onUnmounted(() => {
   justify-content: center;
   gap: 6px;
   padding: 12px 14px;
-  background: rgba(255, 0, 255, 0.1);
-  border: 1px solid rgba(255, 0, 255, 0.3);
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
   border-radius: 10px;
   font-size: 13px;
   font-weight: 500;
-  color: #ff00ff;
+  color: #ff6b6b;
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .btn-test:hover {
-  background: rgba(255, 0, 255, 0.2);
-  border-color: rgba(255, 0, 255, 0.5);
-  box-shadow: 0 0 20px rgba(255, 0, 255, 0.3);
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.5);
+  box-shadow: 0 0 20px rgba(255, 107, 107, 0.3);
 }
 
 .btn-danger {
@@ -1338,6 +1584,10 @@ onUnmounted(() => {
   cursor: grabbing;
 }
 
+.dark-canvas.measurement-hover {
+  cursor: pointer;
+}
+
 /* 右上角信息面板 */
 .info-panel {
   position: absolute;
@@ -1380,7 +1630,7 @@ onUnmounted(() => {
 }
 
 .info-value.selected {
-  color: #ff00ff;
+  color: #ff6b6b;
   font-size: 11px;
 }
 
@@ -1405,7 +1655,7 @@ onUnmounted(() => {
 
 .info-value.zoom {
   font-size: 16px;
-  color: #ff00ff;
+  color: #ff6b6b;
 }
 
 .info-value.highlight {

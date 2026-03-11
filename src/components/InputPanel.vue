@@ -342,20 +342,20 @@ const handleClear = () => {
   justify-content: center;
   gap: 6px;
   padding: 12px 14px;
-  background: rgba(255, 0, 255, 0.1);
-  border: 1px solid rgba(255, 0, 255, 0.3);
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
   border-radius: 10px;
   font-size: 13px;
   font-weight: 500;
-  color: #ff00ff;
+  color: #ff6b6b;
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .btn-test:hover {
-  background: rgba(255, 0, 255, 0.2);
-  border-color: rgba(255, 0, 255, 0.5);
-  box-shadow: 0 0 20px rgba(255, 0, 255, 0.3);
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.5);
+  box-shadow: 0 0 20px rgba(255, 107, 107, 0.3);
 }
 
 .btn-danger {

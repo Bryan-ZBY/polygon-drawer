@@ -2,6 +2,7 @@
 import { ref, watch } from 'vue'
 import type { Geometry, Polygon, ParseResult } from '@/types'
 import { GeometryType } from '@/types'
+import { parse3DPoints, is3DFormat } from '@/utils/geometry3d'
 
 interface Props {
   geometriesCount: number
@@ -18,6 +19,7 @@ const emit = defineEmits<{
 const inputText = ref('')
 const localError = ref('')
 const isValid = ref(false)
+const is3DMode = ref(false)
 
 // 多边形解析器
 const parsePolygon = (input: string): ParseResult<Polygon> => {
@@ -67,18 +69,45 @@ const parsePolygon = (input: string): ParseResult<Polygon> => {
 // 监听输入变化，实时绘制
 watch(inputText, () => {
   localError.value = ''
-  const result = parsePolygon(inputText.value)
-
-  if (result.success && result.data) {
-    isValid.value = true
-    // 实时添加到画布，标记为实时预览
-    emit('add', result.data, true)
-    // 输入合法并成功绘制后，清空输入框
-    inputText.value = ''
+  
+  // 检查是否是三维点格式
+  if (is3DFormat(inputText.value)) {
+    is3DMode.value = true
+    const result3D = parse3DPoints(inputText.value)
+    
+    if (result3D.success && result3D.points2D) {
+      isValid.value = true
+      // 将二维点转换为多边形，每次都创建新图形
+      const polygon: Omit<Polygon, 'id' | 'name' | 'color'> = {
+        type: GeometryType.POLYGON,
+        points: result3D.points2D,
+        visible: true
+      }
+      emit('add', polygon, false)
+      // 输入合法并成功绘制后，清空输入框
+      inputText.value = ''
+      is3DMode.value = false
+    } else {
+      isValid.value = false
+      if (inputText.value.trim()) {
+        localError.value = result3D.error || ''
+      }
+    }
   } else {
-    isValid.value = false
-    if (inputText.value.trim()) {
-      localError.value = result.error || ''
+    is3DMode.value = false
+    const result = parsePolygon(inputText.value)
+
+    if (result.success && result.data) {
+      isValid.value = true
+      // 每次都创建新图形，isRealtime 设为 false
+      emit('add', result.data, false)
+      // 输入合法并成功绘制后，清空输入框
+      inputText.value = ''
+    } else {
+      isValid.value = false
+      if (inputText.value.trim()) {
+        localError.value = result.error || ''
+      }
     }
   }
 })
@@ -89,14 +118,15 @@ watch(inputText, () => {
     <label class="input-label">
       <span class="label-icon">📐</span>
       输入点集 (JSON)
-      <span v-if="isValid" class="valid-badge">✓</span>
+      <span v-if="is3DMode" class="mode-badge">3D</span>
+      <span v-else-if="isValid" class="valid-badge">✓</span>
     </label>
     <textarea
       v-model="inputText"
-      placeholder='[{"x": 100, "y": 100}, {"x": 200, "y": 100}, {"x": 150, "y": 200}]'
+      placeholder='[{"x": 100, "y": 100}, {"x": 200, "y": 100}] 或 [{"X": 114.73, "Y": 280, "Z": 511.39}, ...]'
       rows="6"
       class="glass-input"
-      :class="{ valid: isValid, invalid: localError }"
+      :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode }"
     ></textarea>
     <p v-if="localError" class="error-msg">
       <span class="error-icon">⚠</span>
@@ -157,6 +187,16 @@ watch(inputText, () => {
   color: #00ff88;
 }
 
+.mode-badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  background: rgba(255, 107, 107, 0.2);
+  border: 1px solid rgba(255, 107, 107, 0.5);
+  border-radius: 12px;
+  font-size: 11px;
+  color: #ff6b6b;
+}
+
 .glass-input {
   width: 100%;
   padding: 14px;
@@ -192,6 +232,11 @@ watch(inputText, () => {
   box-shadow: 0 0 0 3px rgba(255, 107, 107, 0.1);
 }
 
+.glass-input.mode-3d {
+  border-color: rgba(255, 0, 255, 0.5);
+  box-shadow: 0 0 0 3px rgba(255, 0, 255, 0.1);
+}
+
 .error-msg {
   display: flex;
   align-items: center;
@@ -220,20 +265,20 @@ watch(inputText, () => {
   justify-content: center;
   gap: 6px;
   padding: 10px 16px;
-  background: rgba(255, 0, 255, 0.1);
-  border: 1px solid rgba(255, 0, 255, 0.3);
+  background: rgba(255, 107, 107, 0.1);
+  border: 1px solid rgba(255, 107, 107, 0.3);
   border-radius: 8px;
   font-size: 13px;
   font-weight: 500;
-  color: #ff00ff;
+  color: #ff6b6b;
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .btn-test:hover {
-  background: rgba(255, 0, 255, 0.2);
-  border-color: rgba(255, 0, 255, 0.5);
-  box-shadow: 0 0 20px rgba(255, 0, 255, 0.3);
+  background: rgba(255, 107, 107, 0.2);
+  border-color: rgba(255, 107, 107, 0.5);
+  box-shadow: 0 0 20px rgba(255, 107, 107, 0.3);
 }
 
 .btn-print {

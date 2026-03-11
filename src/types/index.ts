@@ -96,9 +96,9 @@ export interface GeometryParser {
 
 // 霓虹色彩配置
 export const NEON_COLORS = [
-  '#00f5ff', '#ff00ff', '#00ff88', '#ffaa00',
-  '#ff3366', '#aa66ff', '#00ccff', '#ff6699',
-  '#66ffcc', '#ffcc00', '#ff6b6b', '#4ecdc4'
+  '#00f5ff', '#ff6b6b', '#00ff88', '#ffaa00',
+  '#ff3366', '#4ecdc4', '#00ccff', '#ff6699',
+  '#66ffcc', '#ffcc00', '#ff8c00', '#20b2aa'
 ]
 
 // 生成唯一ID
