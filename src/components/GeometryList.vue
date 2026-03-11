@@ -16,7 +16,6 @@ const emit = defineEmits<{
   toggleGroupCollapse: [groupId: string]
   startRename: [geometry: Geometry]
   delete: [id: string]
-  toggleLock: [geometry: Geometry]
   moveUp: [id: string]
   moveDown: [id: string]
   moveToTop: [id: string]
@@ -109,22 +108,6 @@ const isPolygonInGroupSelected = (group: PolygonGroup) => {
                   </svg>
                 </button>
               </div>
-              <!-- 锁定按钮 -->
-              <button 
-                class="action-btn"
-                :class="{ locked: geometry.locked }"
-                @click.stop="emit('toggleLock', geometry)"
-                :title="geometry.locked ? '解锁' : '锁定'"
-              >
-                <svg v-if="geometry.locked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                  <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                </svg>
-                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                  <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
-                </svg>
-              </button>
               <!-- 折叠/展开按钮 -->
               <button 
                 class="action-btn"
@@ -241,22 +224,6 @@ const isPolygonInGroupSelected = (group: PolygonGroup) => {
                 </svg>
               </button>
             </div>
-            <!-- 锁定按钮 -->
-            <button 
-              class="action-btn"
-              :class="{ locked: geometry.locked }"
-              @click.stop="emit('toggleLock', geometry)"
-              :title="geometry.locked ? '解锁' : '锁定'"
-            >
-              <svg v-if="geometry.locked" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-              </svg>
-              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
-              </svg>
-            </button>
             <button 
               class="action-btn"
               :class="{ inactive: !geometry.visible }"
@@ -484,22 +451,5 @@ const isPolygonInGroupSelected = (group: PolygonGroup) => {
 .layer-controls .action-btn {
   width: 22px;
   height: 22px;
-}
-
-/* 锁定按钮样式 */
-.action-btn.locked {
-  background: rgba(255, 170, 0, 0.15);
-  border-color: rgba(255, 170, 0, 0.4);
-  color: #ffaa00;
-}
-
-.action-btn.locked:hover {
-  background: rgba(255, 170, 0, 0.25);
-  border-color: rgba(255, 170, 0, 0.6);
-}
-
-/* 锁定状态的卡片 */
-.geometry-card:has(.action-btn.locked) {
-  border-left: 3px solid rgba(255, 170, 0, 0.6);
 }
 </style>

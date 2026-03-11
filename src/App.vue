@@ -25,8 +25,115 @@ const selectedEdge = ref<{ polygonId: string; edgeIndex: number; start: Point; e
 const hoveredId = ref<string | null>(null)
 const errorMsg = ref('')
 const canvasRef = ref<HTMLCanvasElement | null>(null)
-const showGrid = ref(true) // 是否显示网格
 const guideRef = ref<InstanceType<typeof GuideOverlay> | null>(null) // 新手引导引用
+
+// 聚焦按钮状态
+const focusButton = ref<{
+  show: boolean
+  x: number
+  y: number
+  geometryId: string | null
+}>({ show: false, x: 0, y: 0, geometryId: null })
+
+// 所有多边形显隐状态
+const allVisible = computed(() => {
+  return geometries.value.length > 0 && geometries.value.every(g => g.visible)
+})
+
+// 切换所有多边形显隐
+const toggleAllVisibility = () => {
+  const newVisible = !allVisible.value
+  
+  // 如果是显示，立即设置所有 visible 为 true
+  if (newVisible) {
+    geometries.value.forEach(geometry => {
+      geometry.visible = true
+      // 初始化透明度
+      if (geometry.opacity === undefined) {
+        geometry.opacity = 0
+      }
+    })
+  }
+  
+  // 动画过渡（0.5秒）
+  const duration = 500
+  const startTime = performance.now()
+  const startOpacities = geometries.value.map(g => g.opacity || 0)
+  const targetOpacity = newVisible ? 1 : 0
+  
+  const easeInOutCubic = (t: number): number => {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+  }
+  
+  const animate = (currentTime: number) => {
+    const elapsed = currentTime - startTime
+    const progress = Math.min(elapsed / duration, 1)
+    const easedProgress = easeInOutCubic(progress)
+    
+    geometries.value.forEach((geometry, index) => {
+      const startOpacity = startOpacities[index] || 0
+      geometry.opacity = startOpacity + (targetOpacity - startOpacity) * easedProgress
+    })
+    
+    scheduleDraw()
+    
+    if (progress < 1) {
+      requestAnimationFrame(animate)
+    } else {
+      // 动画结束后，如果是隐藏，再设置所有 visible 为 false
+      if (!newVisible) {
+        geometries.value.forEach(geometry => {
+          geometry.visible = false
+        })
+      }
+    }
+  }
+  
+  requestAnimationFrame(animate)
+}
+
+// 显示聚焦按钮
+const showFocusButton = (geometryId: string, screenX: number, screenY: number) => {
+  focusButton.value = {
+    show: true,
+    x: screenX + 10,
+    y: screenY - 40,
+    geometryId
+  }
+}
+
+// 隐藏聚焦按钮
+const hideFocusButton = () => {
+  focusButton.value.show = false
+  focusButton.value.geometryId = null
+}
+
+// 点击聚焦按钮
+const onFocusButtonClick = () => {
+  if (focusButton.value.geometryId) {
+    // 先在顶层 geometries 中查找
+    let geometry = geometries.value.find(g => g.id === focusButton.value.geometryId)
+    
+    // 如果没找到，在多边形组中查找
+    if (!geometry) {
+      for (const g of geometries.value) {
+        if (g.type === 'group') {
+          const group = g as PolygonGroup
+          const polygon = group.polygons.find(p => p.id === focusButton.value.geometryId)
+          if (polygon) {
+            geometry = polygon
+            break
+          }
+        }
+      }
+    }
+    
+    if (geometry) {
+      hideFocusButton()
+      fitViewToGeometry(geometry, true)
+    }
+  }
+}
 
 // 撤销/恢复历史记录
 interface HistoryState {
@@ -284,11 +391,14 @@ const drawAll = () => {
   clearCanvas(ctx, canvas.width, canvas.height)
 
   // 绘制网格
-  drawGrid(ctx, canvas.width, canvas.height, viewState.value, { showGrid: showGrid.value })
+  drawGrid(ctx, canvas.width, canvas.height, viewState.value)
 
   // 绘制所有可见图形
   geometries.value.forEach(geometry => {
     if (geometry.visible) {
+      // 获取透明度（用于显示隐藏动画）
+      const opacity = geometry.opacity !== undefined ? geometry.opacity : 1
+      
       // 处理多边形组
       if (geometry.type === 'group') {
         const group = geometry as PolygonGroup
@@ -297,14 +407,14 @@ const drawAll = () => {
             const isHovered = hoveredId.value === polygon.id
             const isSelected = selectedId.value === polygon.id || (group.collapsed && selectedId.value === group.id)
             const activeVertex = hoveredVertex.value || lastHoveredVertex.value
-            drawGeometry(ctx, polygon, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex)
+            drawGeometry(ctx, polygon, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex, opacity)
           }
         })
       } else {
         const isHovered = hoveredId.value === geometry.id
         const isSelected = selectedId.value === geometry.id
         const activeVertex = hoveredVertex.value || lastHoveredVertex.value
-        drawGeometry(ctx, geometry, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex)
+        drawGeometry(ctx, geometry, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex, opacity)
       }
     }
   })
@@ -1415,6 +1525,11 @@ const handleMouseMove = (e: MouseEvent) => {
       viewState.value.offsetX += deltaX
       viewState.value.offsetY += deltaY
       dragChanged = true
+      
+      // 实际开始拖拽时隐藏聚焦按钮
+      if (focusButton.value.show) {
+        hideFocusButton()
+      }
     }
 
     lastMousePos.value = { x: e.clientX, y: e.clientY }
@@ -1589,9 +1704,34 @@ const handleMouseDown = (e: MouseEvent) => {
       return
     }
     
+    // 双击或Ctrl+左键点击多边形内部：开始测距（不选中多边形）
+    if ((isDoubleClick || e.ctrlKey) && clickedPolygonResult && !isMeasuring.value) {
+      ignoreNextClick.value = true
+      selectedMeasurementId.value = null
+      measurementDeleteBtnPos.value = null
+      
+      // 检测吸附
+      const snap = detectSnap(worldPos)
+      const finalPoint = snap.point || worldPos
+      
+      // 开始测距
+      isMeasuring.value = true
+      isMeasurePending.value = false
+      measureStart.value = finalPoint
+      measureEnd.value = finalPoint
+      canMeasureDrag.value = false
+      
+      scheduleDraw()
+      return
+    }
+    
     if (clickedPolygonResult) {
       const { polygon, edgeIndex } = clickedPolygonResult
       selectedId.value = polygon.id
+      
+      // 显示聚焦按钮
+      showFocusButton(polygon.id, e.clientX, e.clientY)
+      
       // 不自动清空测距线选中状态，让用户可以同时查看多边形/边和测距线信息
       
       // 如果点击了边，设置选中边状态
@@ -1607,8 +1747,15 @@ const handleMouseDown = (e: MouseEvent) => {
         selectedEdge.value = null
       }
       
+      // 同时启动画布拖拽，让用户可以在多边形内部拖动画布
+      isDragging.value = true
+      lastMousePos.value = { x: e.clientX, y: e.clientY }
+      
       scheduleDraw()
       return
+    } else {
+      // 点击空白处隐藏聚焦按钮
+      hideFocusButton()
     }
 
     // 双击 或 Ctrl+左键：开始测距或结束测距
@@ -1799,13 +1946,19 @@ const addGeometry = (partialGeometry: Omit<Geometry, 'id' | 'name' | 'color'>, i
 
   if (!isRealtime) {
     selectedId.value = newGeometry.id
-    // 如果是第一个图形，自适应缩放
+    // 如果是第一个图形，先显示0.1秒再自适应缩放
     if (geometries.value.length === 1) {
-      fitViewToGeometry(newGeometry)
+      scheduleDraw()
+      setTimeout(() => {
+        fitViewToGeometry(newGeometry, true)
+      }, 100)
+    } else {
+      saveToHistory() // 保存历史记录
+      scheduleDraw()
     }
-    saveToHistory() // 保存历史记录
+  } else {
+    scheduleDraw()
   }
-  scheduleDraw()
 }
 
 // 添加多边形组
@@ -1834,12 +1987,16 @@ const addPolygonGroup = (partialGroup: Omit<PolygonGroup, 'id' | 'name' | 'color
   }
 
   selectedId.value = newGroup.id
-  // 如果是第一个图形，自适应缩放
+  // 如果是第一个图形，先显示0.1秒再自适应缩放
   if (geometries.value.length === 1) {
-    fitViewToGeometry(newGroup)
+    scheduleDraw()
+    setTimeout(() => {
+      fitViewToGeometry(newGroup, true)
+    }, 100)
+  } else {
+    saveToHistory() // 保存历史记录
+    scheduleDraw()
   }
-  saveToHistory() // 保存历史记录
-  scheduleDraw()
 }
 
 // 切换多边形组的折叠状态
@@ -1904,15 +2061,61 @@ const deleteGeometry = (id: string) => {
   }
 }
 
-// 切换可见性
+// 切换可见性（带动画）
 const toggleVisibility = (geometry: Geometry) => {
-  geometry.visible = !geometry.visible
-  scheduleDraw()
+  const isShowing = !geometry.visible
+  
+  // 如果是显示，立即设置 visible 为 true
+  if (isShowing) {
+    geometry.visible = true
+  }
+  
+  // 初始化透明度
+  if (geometry.opacity === undefined) {
+    geometry.opacity = isShowing ? 0 : 1
+  }
+  
+  // 动画目标值
+  const targetOpacity = isShowing ? 1 : 0
+  const startOpacity = geometry.opacity
+  const startTime = performance.now()
+  const duration = 500 // 0.5秒动画
+  
+  // 使用 easeInOutCubic 缓动函数
+  const easeInOutCubic = (t: number): number => {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+  }
+  
+  const animate = (currentTime: number) => {
+    const elapsed = currentTime - startTime
+    const progress = Math.min(elapsed / duration, 1)
+    const easedProgress = easeInOutCubic(progress)
+    
+    geometry.opacity = startOpacity + (targetOpacity - startOpacity) * easedProgress
+    scheduleDraw()
+    
+    if (progress < 1) {
+      requestAnimationFrame(animate)
+    } else {
+      // 动画结束后，如果是隐藏，再设置 visible 为 false
+      if (!isShowing) {
+        geometry.visible = false
+      }
+    }
+  }
+  
+  requestAnimationFrame(animate)
 }
 
 // 选择图形
-const selectGeometry = (id: string) => {
+const selectGeometry = (id: string, event?: MouseEvent) => {
   selectedId.value = id
+  
+  // 如果有事件，显示聚焦按钮
+  if (event) {
+    showFocusButton(id, event.clientX, event.clientY)
+  }
+  
   scheduleDraw()
 }
 
@@ -1944,12 +2147,6 @@ const cancelRename = () => {
 const resetView = () => {
   // 使用动画过渡到默认视图
   animateViewTransition(1, 0, 0, 400)
-}
-
-// 切换网格显示
-const toggleGrid = () => {
-  showGrid.value = !showGrid.value
-  scheduleDraw()
 }
 
 // 动画过渡函数
@@ -2131,12 +2328,6 @@ const clearAll = () => {
     saveToHistory() // 保存历史记录
     scheduleDraw()
   }
-}
-
-// 切换锁定状态
-const toggleLock = (geometry: Geometry) => {
-  geometry.locked = !geometry.locked
-  scheduleDraw()
 }
 
 // 上移图层
@@ -2395,7 +2586,6 @@ onUnmounted(() => {
           @toggle-group-collapse="toggleGroupCollapse"
           @start-rename="startRename"
           @delete="deleteGeometry"
-          @toggle-lock="toggleLock"
           @move-up="moveLayerUp"
           @move-down="moveLayerDown"
         />
@@ -2452,19 +2642,6 @@ onUnmounted(() => {
         </button>
         <button 
           class="view-btn" 
-          @click="toggleGrid"
-          :class="{ active: showGrid }"
-          title="显示/隐藏网格"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="7" height="7"/>
-            <rect x="14" y="3" width="7" height="7"/>
-            <rect x="14" y="14" width="7" height="7"/>
-            <rect x="3" y="14" width="7" height="7"/>
-          </svg>
-        </button>
-        <button 
-          class="view-btn" 
           @click="resetView"
           title="重置视图"
         >
@@ -2482,6 +2659,21 @@ onUnmounted(() => {
             <circle cx="12" cy="12" r="10"/>
             <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
             <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
+        <button 
+          class="view-btn" 
+          @click="toggleAllVisibility"
+          :class="{ active: allVisible }"
+          title="显示/隐藏所有多边形"
+        >
+          <svg v-if="allVisible" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+            <line x1="1" y1="1" x2="23" y2="23"/>
           </svg>
         </button>
       </div>
@@ -2558,14 +2750,11 @@ onUnmounted(() => {
         <span class="key">滚轮</span>
         <span>缩放</span>
         <span class="divider">|</span>
-        <span class="key">左键拖拽</span>
+        <span class="key">左/右键拖拽</span>
         <span>移动画布</span>
         <span class="divider">|</span>
         <span class="key">双击/Ctrl+左键</span>
         <span>测距</span>
-        <span class="divider">|</span>
-        <span class="key">右键拖拽</span>
-        <span>移动画布</span>
       </div>
     </div>
 
@@ -2596,6 +2785,25 @@ onUnmounted(() => {
         </svg>
       </button>
     </div>
+
+    <!-- 聚焦按钮 -->
+    <Teleport to="body">
+      <Transition name="fade">
+        <div
+          v-if="focusButton.show"
+          class="focus-button"
+          :style="{ left: focusButton.x + 'px', top: focusButton.y + 'px' }"
+          @click="onFocusButtonClick"
+          title="聚焦到该多边形"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+          <span>聚焦</span>
+        </div>
+      </Transition>
+    </Teleport>
 
     <!-- 新手引导 -->
     <GuideOverlay ref="guideRef" />
@@ -2915,6 +3123,45 @@ onUnmounted(() => {
 
 .dark-canvas.measurement-hover {
   cursor: pointer;
+}
+
+/* 聚焦按钮 */
+.focus-button {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: rgba(20, 20, 30, 0.95);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 245, 255, 0.5);
+  border-radius: 8px;
+  color: #00f5ff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 20px rgba(0, 245, 255, 0.2);
+  pointer-events: auto;
+}
+
+.focus-button:hover {
+  background: rgba(0, 245, 255, 0.15);
+  transform: scale(1.05);
+  box-shadow: 0 4px 25px rgba(0, 0, 0, 0.5), 0 0 30px rgba(0, 245, 255, 0.3);
+}
+
+/* 聚焦按钮过渡动画 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+  transform: scale(0.9);
 }
 
 /* 右上角信息面板 */

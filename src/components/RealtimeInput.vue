@@ -440,7 +440,7 @@ watch(inputText, () => {
     <div class="input-row">
       <input
         v-model="inputText"
-        placeholder='粘贴点集或边数据...'
+        placeholder='📋 粘贴多边形数据 (JSON格式)'
         class="glass-input"
         :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode, processing: isProcessing }"
         :disabled="isProcessing"
@@ -479,36 +479,41 @@ watch(inputText, () => {
 
 .glass-input {
   flex: 1;
-  padding: 6px 10px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
+  padding: 10px 14px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(117, 142, 255, 0.5);
+  border-radius: 8px;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 12px;
-  color: #00f5ff;
-  transition: all 0.2s ease;
+  font-size: 13px;
+  color: #758eff;
+  transition: all 0.3s ease;
+  box-shadow: 0 0 15px rgba(117, 142, 255, 0.15), inset 0 0 20px rgba(0, 0, 0, 0.3);
 }
 
 .glass-input::placeholder {
-  color: rgba(255, 255, 255, 0.3);
+  color: rgba(117, 142, 255, 0.5);
 }
 
 .glass-input:focus {
   outline: none;
-  border-color: rgba(0, 245, 255, 0.4);
-  background: rgba(0, 0, 0, 0.4);
+  border-color: rgba(117, 142, 255, 0.9);
+  background: rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 25px rgba(117, 142, 255, 0.35), inset 0 0 20px rgba(0, 0, 0, 0.4);
 }
 
 .glass-input.valid {
-  border-color: rgba(0, 255, 136, 0.4);
+  border-color: rgba(0, 255, 136, 0.6);
+  box-shadow: 0 0 20px rgba(0, 255, 136, 0.15);
 }
 
 .glass-input.invalid {
-  border-color: rgba(255, 107, 107, 0.4);
+  border-color: rgba(255, 107, 107, 0.6);
+  box-shadow: 0 0 20px rgba(255, 107, 107, 0.15);
 }
 
 .glass-input.mode-3d {
-  border-color: rgba(255, 0, 255, 0.4);
+  border-color: rgba(255, 0, 255, 0.6);
+  box-shadow: 0 0 20px rgba(255, 0, 255, 0.15);
 }
 
 .glass-input.processing {

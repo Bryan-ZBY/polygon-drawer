@@ -76,27 +76,8 @@ export const drawGrid = (
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  viewState: ViewState,
-  options: { showGrid?: boolean; gridColor?: string } = {}
+  viewState: ViewState
 ): void => {
-  const { showGrid = true, gridColor = 'rgba(0, 245, 255, 0.06)' } = options
-  
-  if (!showGrid) {
-    // 只绘制坐标轴
-    const originX = width / 2 + viewState.offsetX
-    const originY = height / 2 + viewState.offsetY
-    
-    ctx.strokeStyle = 'rgba(0, 245, 255, 0.2)'
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.moveTo(originX, 0)
-    ctx.lineTo(originX, height)
-    ctx.moveTo(0, originY)
-    ctx.lineTo(width, originY)
-    ctx.stroke()
-    return
-  }
-  
   const gridSize = 50
   const screenGridSize = gridSize * viewState.scale
   
@@ -107,7 +88,7 @@ export const drawGrid = (
   const startY = centerY % screenGridSize
   
   // 批量绘制竖线
-  ctx.strokeStyle = gridColor
+  ctx.strokeStyle = 'rgba(0, 245, 255, 0.06)'
   ctx.lineWidth = 1
   ctx.beginPath()
   for (let x = startX; x <= width; x += screenGridSize) {
@@ -220,10 +201,14 @@ export const drawPolygon = (
   isHovered: boolean,
   isSelected: boolean,
   activeHoveredVertex: { geometryId: string; vertexIndex: number; point: Point } | null = null,
-  enableCulling: boolean = true
+  enableCulling: boolean = true,
+  opacity: number = 1
 ): { screenPoints: Point[] } => {
   const points = polygon.points
   if (points.length < 3) return { screenPoints: [] }
+  
+  // 如果透明度为0，跳过绘制
+  if (opacity <= 0) return { screenPoints: [] }
   
   // 视口裁剪
   if (enableCulling) {
@@ -254,16 +239,16 @@ export const drawPolygon = (
   // 根据状态绘制 - 简化效果以提升性能
   if (isHovered || isSelected) {
     // 填充 - 不使用阴影
-    ctx.fillStyle = hexToRgba(polygon.color, 0.2)
+    ctx.fillStyle = hexToRgba(polygon.color, 0.2 * opacity)
     ctx.fill()
     
     // 边框
-    ctx.strokeStyle = polygon.color
+    ctx.strokeStyle = hexToRgba(polygon.color, opacity)
     ctx.lineWidth = isSelected ? 2.5 : 2
     ctx.stroke()
   } else {
     // 默认状态：仅轮廓
-    ctx.strokeStyle = polygon.color
+    ctx.strokeStyle = hexToRgba(polygon.color, opacity)
     ctx.lineWidth = 1.5
     ctx.stroke()
   }
@@ -513,11 +498,12 @@ export const drawGeometry = (
   canvasHeight: number,
   isHovered: boolean,
   isSelected: boolean,
-  activeHoveredVertex: { geometryId: string; vertexIndex: number; point: Point } | null = null
+  activeHoveredVertex: { geometryId: string; vertexIndex: number; point: Point } | null = null,
+  opacity: number = 1
 ): { screenPoints?: Point[] } => {
   switch (geometry.type) {
     case GeometryType.POLYGON:
-      return drawPolygon(ctx, geometry as Polygon, viewState, canvasWidth, canvasHeight, isHovered, isSelected, activeHoveredVertex)
+      return drawPolygon(ctx, geometry as Polygon, viewState, canvasWidth, canvasHeight, isHovered, isSelected, activeHoveredVertex, true, opacity)
     case GeometryType.LINE:
       drawLine(ctx, geometry as Line, viewState, canvasWidth, canvasHeight, isHovered, isSelected)
       return {}

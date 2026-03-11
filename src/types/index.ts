@@ -21,7 +21,7 @@ export interface BaseGeometry {
   type: GeometryType
   visible: boolean
   color: string
-  locked?: boolean  // 是否锁定（防止误操作）
+  opacity?: number  // 透明度（用于显示隐藏动画）
 }
 
 // 多边形
@@ -70,7 +70,7 @@ export interface PolygonGroup {
   collapsed: boolean
   polygons: Polygon[]
   color: string
-  locked?: boolean  // 是否锁定（防止误操作）
+  opacity?: number  // 透明度（用于显示隐藏动画）
 }
 
 // 联合类型
