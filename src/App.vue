@@ -139,13 +139,27 @@ const mouseWorldPos = computed(() => {
   }
 })
 
-// 计算选中的多边形
+// 计算选中的多边形（包括多边形组内的多边形）
 const selectedPolygon = computed(() => {
   if (!selectedId.value) return null
+
+  // 先在 geometries 中查找
   const geometry = geometries.value.find(g => g.id === selectedId.value)
   if (geometry && geometry.type === 'polygon') {
     return geometry as Polygon
   }
+
+  // 在多边形组中查找
+  for (const g of geometries.value) {
+    if (g.type === 'group') {
+      const group = g as PolygonGroup
+      const polygon = group.polygons.find(p => p.id === selectedId.value)
+      if (polygon) {
+        return polygon
+      }
+    }
+  }
+
   return null
 })
 
@@ -1799,8 +1813,11 @@ const addPolygonGroup = (partialGroup: Omit<PolygonGroup, 'id' | 'name' | 'color
 
   geometries.value.push(newGroup)
 
-  // 保存原始输入数据（为每个多边形保存对应的原始边数据）
+  // 保存原始输入数据
   if (originalData && Array.isArray(originalData)) {
+    // 为多边形组本身保存完整的原始输入数据
+    originalInputData.value.set(newGroup.id, originalData)
+    // 为每个多边形保存对应的原始数据
     newGroup.polygons.forEach((polygon, index) => {
       if (originalData[index]) {
         originalInputData.value.set(polygon.id, originalData[index])
@@ -1959,6 +1976,11 @@ const printGeometries = () => {
       const group = geometry as PolygonGroup
       obj.polygonCount = group.polygons.length
       obj.collapsed = group.collapsed
+      // 添加多边形组本身的原始输入数据
+      const groupOriginalData = originalInputData.value.get(group.id)
+      if (groupOriginalData) {
+        obj.originalData = groupOriginalData
+      }
       obj.polygons = group.polygons.map((p, i) => ({
         index: i + 1,
         id: p.id,
@@ -1997,6 +2019,10 @@ const printGeometries = () => {
     if (obj.type === 'polygon' && obj.originalData) {
       console.log('  原始输入数据:', obj.originalData)
     } else if (obj.type === 'group' && obj.polygons) {
+      // 打印多边形组本身的完整原始输入
+      if (obj.originalData) {
+        console.log('  多边形组原始输入数据:', obj.originalData)
+      }
       console.log('  组内多边形原始输入:')
       obj.polygons.forEach((p: any) => {
         console.log(`    [${p.index}] ${p.name}:`, p.originalData || '无原始数据')
@@ -2027,16 +2053,36 @@ const resizeCanvas = () => {
   scheduleDraw()
 }
 
-// 滚轮缩放
+// 滚轮缩放（以鼠标位置为中心）
 const handleWheel = (e: WheelEvent) => {
   e.preventDefault()
+
+  const canvas = canvasRef.value
+  if (!canvas) return
 
   const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1
   const newScale = viewState.value.scale * scaleFactor
 
   if (newScale < 0.1 || newScale > 10) return
 
+  // 获取鼠标在画布上的位置
+  const rect = canvas.getBoundingClientRect()
+  const mouseX = e.clientX - rect.left
+  const mouseY = e.clientY - rect.top
+
+  // 计算鼠标位置对应的世界坐标
+  const centerX = canvas.width / 2
+  const centerY = canvas.height / 2
+  const worldX = (mouseX - centerX - viewState.value.offsetX) / viewState.value.scale
+  const worldY = -(mouseY - centerY - viewState.value.offsetY) / viewState.value.scale
+
+  // 更新缩放比例
   viewState.value.scale = newScale
+
+  // 调整偏移量，使鼠标位置对应的世界坐标保持不变
+  viewState.value.offsetX = mouseX - centerX - worldX * newScale
+  viewState.value.offsetY = mouseY - centerY + worldY * newScale
+
   scheduleDraw()
 }
 

@@ -168,13 +168,53 @@ const parseEdgesFormat = (edges: any[]): ParseResult<Polygon> => {
   }
 }
 
-// 解析多边形组格式（支持边数据格式或点数组格式）
+// 将任意深度的数组扁平化为两层（多边形组格式）
+const flattenToTwoLevels = (data: any[]): any[] => {
+  const result: any[] = []
+
+  const isPolygonData = (item: any): boolean => {
+    // 检查是否是多边形数据（点数组或边数组）
+    if (!Array.isArray(item) || item.length === 0) return false
+    const first = item[0]
+    // 点数组格式：包含 X/Y 或 x/y
+    if (typeof first === 'object' && (typeof first.X === 'number' || typeof first.x === 'number')) return true
+    // 边数组格式：包含 P1/P2
+    if (typeof first === 'object' && (first.P1 || first.P2)) return true
+    return false
+  }
+
+  const flatten = (arr: any[]) => {
+    for (const item of arr) {
+      if (Array.isArray(item)) {
+        if (isPolygonData(item)) {
+          // 这是多边形数据，添加到结果
+          result.push(item)
+        } else {
+          // 继续递归扁平化
+          flatten(item)
+        }
+      }
+    }
+  }
+
+  flatten(data)
+  return result
+}
+
+// 解析多边形组格式（支持边数据格式或点数组格式，支持任意深度嵌套）
 const parsePolygonGroup = (data: any[]): { success: boolean; group?: Omit<PolygonGroup, 'id' | 'name' | 'color'>; error?: string } => {
   try {
+    // 首先将任意深度的数组扁平化为两层
+    const flattenedData = flattenToTwoLevels(data)
+
+    if (flattenedData.length === 0) {
+      return { success: false, error: '未能解析出有效的多边形数据' }
+    }
+
     const polygons: Polygon[] = []
 
-    for (let i = 0; i < data.length; i++) {
-      const polygonData = data[i]
+    for (let i = 0; i < flattenedData.length; i++) {
+      const polygonData = flattenedData[i]
 
       if (!Array.isArray(polygonData)) {
         return { success: false, error: `第 ${i + 1} 个多边形数据必须是数组` }
