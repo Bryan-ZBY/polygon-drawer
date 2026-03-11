@@ -19,6 +19,7 @@ import RealtimeInput from '@/components/RealtimeInput.vue'
 // 状态
 const geometries = ref<Geometry[]>([])
 const selectedId = ref<string | null>(null)
+const selectedEdge = ref<{ polygonId: string; edgeIndex: number; start: Point; end: Point } | null>(null)
 const hoveredId = ref<string | null>(null)
 const errorMsg = ref('')
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -82,6 +83,12 @@ const selectedPolygon = computed(() => {
     return geometry as Polygon
   }
   return null
+})
+
+// 计算选中的测距线
+const selectedMeasurement = computed(() => {
+  if (!selectedMeasurementId.value) return null
+  return measurements.value.find(m => m.id === selectedMeasurementId.value) || null
 })
 
 // 视图状态
@@ -207,6 +214,119 @@ const drawAll = () => {
       drawGeometry(ctx, geometry, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex)
     }
   })
+
+  // 绘制选中边的高亮
+  if (selectedEdge.value) {
+    const geometry = geometries.value.find(g => g.id === selectedEdge.value?.polygonId)
+    if (geometry && geometry.visible && geometry.type === 'polygon') {
+      const polygon = geometry as Polygon
+      const start = worldToScreen(selectedEdge.value.start)
+      const end = worldToScreen(selectedEdge.value.end)
+      
+      // 绘制高亮边（粉色发光效果）
+      ctx.strokeStyle = '#ff69b4'
+      ctx.lineWidth = 4
+      ctx.lineCap = 'round'
+      ctx.shadowColor = '#ff69b4'
+      ctx.shadowBlur = 15
+      ctx.beginPath()
+      ctx.moveTo(start.x, start.y)
+      ctx.lineTo(end.x, end.y)
+      ctx.stroke()
+      ctx.shadowBlur = 0
+      
+      // 绘制边端点
+      ctx.fillStyle = '#ff69b4'
+      ctx.beginPath()
+      ctx.arc(start.x, start.y, 7, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.strokeStyle = '#fff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+      
+      ctx.beginPath()
+      ctx.arc(end.x, end.y, 7, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+      
+      // 计算边长度
+      const edgeLength = calculateDistance(selectedEdge.value.start, selectedEdge.value.end)
+      
+      // 计算标签位置（垂直于线条偏移）
+      const midX = (start.x + end.x) / 2
+      const midY = (start.y + end.y) / 2
+      const dx = end.x - start.x
+      const dy = end.y - start.y
+      const len = Math.sqrt(dx * dx + dy * dy)
+      
+      let offsetX = 0
+      let offsetY = -30
+      if (len > 0) {
+        offsetX = -(dy / len) * 30
+        offsetY = (dx / len) * 30
+      }
+      
+      const labelX = midX + offsetX
+      const labelY = midY + offsetY
+      
+      // 绘制长度标签背景
+      ctx.font = 'bold 13px "JetBrains Mono", monospace'
+      const label = edgeLength.toFixed(2)
+      const textWidth = ctx.measureText(label).width
+      
+      ctx.fillStyle = 'rgba(255, 105, 180, 0.3)'
+      ctx.strokeStyle = 'rgba(255, 105, 180, 0.6)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(labelX - textWidth / 2 - 6, labelY - 10, textWidth + 12, 20, 4)
+      ctx.fill()
+      ctx.stroke()
+      
+      // 绘制长度标签文字
+      ctx.fillStyle = '#ff69b4'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(label, labelX, labelY)
+      
+      // 绘制端点坐标
+      const startLabel = `(${selectedEdge.value.start.x.toFixed(1)}, ${selectedEdge.value.start.y.toFixed(1)})`
+      const endLabel = `(${selectedEdge.value.end.x.toFixed(1)}, ${selectedEdge.value.end.y.toFixed(1)})`
+      
+      ctx.font = '11px "JetBrains Mono", monospace'
+      const startLabelWidth = ctx.measureText(startLabel).width
+      const endLabelWidth = ctx.measureText(endLabel).width
+      
+      // 绘制起点坐标背景
+      ctx.fillStyle = 'rgba(0, 255, 136, 0.3)'
+      ctx.strokeStyle = 'rgba(0, 255, 136, 0.6)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(start.x - startLabelWidth / 2 - 4, start.y - 22, startLabelWidth + 8, 16, 4)
+      ctx.fill()
+      ctx.stroke()
+      
+      // 绘制起点坐标文字
+      ctx.fillStyle = '#00ff88'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(startLabel, start.x, start.y - 14)
+      
+      // 绘制终点坐标背景
+      ctx.fillStyle = 'rgba(255, 107, 107, 0.3)'
+      ctx.strokeStyle = 'rgba(255, 107, 107, 0.6)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(end.x - endLabelWidth / 2 - 4, end.y - 22, endLabelWidth + 8, 16, 4)
+      ctx.fill()
+      ctx.stroke()
+      
+      // 绘制终点坐标文字
+      ctx.fillStyle = '#ff6b6b'
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(endLabel, end.x, end.y - 14)
+    }
+  }
 
   // 绘制吸附点
   if (snappedPoint.value && snapType.value !== 'none') {
@@ -535,8 +655,8 @@ const drawAll = () => {
     ctx.textBaseline = 'middle'
     ctx.fillText(label, labelX, labelY)
 
-    // 如果悬浮，显示端点坐标
-    if (isHovered) {
+    // 如果悬浮或选中，显示端点坐标
+    if (isHovered || isSelected) {
       // 起点坐标
       const startLabel = `(${measurement.start.x.toFixed(1)}, ${measurement.start.y.toFixed(1)})`
       const endLabel = `(${measurement.end.x.toFixed(1)}, ${measurement.end.y.toFixed(1)})`
@@ -648,8 +768,10 @@ const detectMeasurementClick = (worldPos: Point): { id: string; measurement: { i
   return null
 }
 
-// 检测是否点击了多边形（用于选中）
-const detectPolygonClick = (worldPos: Point): Polygon | null => {
+// 检测是否点击了多边形或边（用于选中）
+const detectPolygonClick = (worldPos: Point): { polygon: Polygon; edgeIndex?: number } | null => {
+  const CLICK_THRESHOLD = 10 / viewState.value.scale // 10像素的点击阈值
+  
   // 倒序遍历，优先检测上层图形
   for (let i = geometries.value.length - 1; i >= 0; i--) {
     const geometry = geometries.value[i]
@@ -657,9 +779,22 @@ const detectPolygonClick = (worldPos: Point): Polygon | null => {
     
     if (geometry.type === 'polygon') {
       const polygon = geometry as Polygon
-      // 使用射线法检测点是否在多边形内
+      
+      // 先检测是否点击了边
+      const points = polygon.points
+      for (let j = 0; j < points.length; j++) {
+        const a = points[j]
+        const b = points[(j + 1) % points.length]
+        const { distance } = pointToSegmentDistance(worldPos, a, b)
+        
+        if (distance < CLICK_THRESHOLD) {
+          return { polygon, edgeIndex: j }
+        }
+      }
+      
+      // 再检测是否点击了多边形内部
       if (isPointInPolygon(worldPos, polygon.points)) {
-        return polygon
+        return { polygon }
       }
     }
   }
@@ -1203,11 +1338,61 @@ const handleMouseDown = (e: MouseEvent) => {
       return
     }
 
-    // 检测是否点击了多边形（用于选中）
-    const clickedPolygon = detectPolygonClick(worldPos)
-    if (clickedPolygon) {
-      selectedId.value = clickedPolygon.id
+    // 检测是否点击了多边形或边（用于选中）
+    const clickedPolygonResult = detectPolygonClick(worldPos)
+    
+    // 双击或Ctrl+左键点击边：以边上最近点为起点开始新测距
+    if ((isDoubleClick || e.ctrlKey) && clickedPolygonResult?.edgeIndex !== undefined && !isMeasuring.value) {
+      const { polygon, edgeIndex } = clickedPolygonResult
+      const points = polygon.points
+      const edgeStart = points[edgeIndex]
+      const edgeEnd = points[(edgeIndex + 1) % points.length]
+      
+      // 计算边上离点击位置最近的点
+      const { closestPoint } = pointToSegmentDistance(worldPos, edgeStart, edgeEnd)
+      
+      ignoreNextClick.value = true
       selectedMeasurementId.value = null
+      measurementDeleteBtnPos.value = null
+      
+      // 以边上最近点作为测距起点
+      isMeasuring.value = true
+      isMeasurePending.value = false
+      measureStart.value = closestPoint
+      measureEnd.value = closestPoint
+      canMeasureDrag.value = false
+      
+      // 同时选中这条边
+      selectedId.value = polygon.id
+      selectedEdge.value = {
+        polygonId: polygon.id,
+        edgeIndex,
+        start: edgeStart,
+        end: edgeEnd
+      }
+      
+      scheduleDraw()
+      return
+    }
+    
+    if (clickedPolygonResult) {
+      const { polygon, edgeIndex } = clickedPolygonResult
+      selectedId.value = polygon.id
+      // 不自动清空测距线选中状态，让用户可以同时查看多边形/边和测距线信息
+      
+      // 如果点击了边，设置选中边状态
+      if (edgeIndex !== undefined) {
+        const points = polygon.points
+        selectedEdge.value = {
+          polygonId: polygon.id,
+          edgeIndex,
+          start: points[edgeIndex],
+          end: points[(edgeIndex + 1) % points.length]
+        }
+      } else {
+        selectedEdge.value = null
+      }
+      
       scheduleDraw()
       return
     }
@@ -1217,7 +1402,10 @@ const handleMouseDown = (e: MouseEvent) => {
       // 设置标志忽略下一次单击（即本次点击的释放）
       ignoreNextClick.value = true
 
-      selectedMeasurementId.value = null
+      // 只有在不是双击测距线的情况下才清空选中状态
+      if (!clickedMeasurement) {
+        selectedMeasurementId.value = null
+      }
       measurementDeleteBtnPos.value = null
 
       // 检测吸附
@@ -1226,6 +1414,7 @@ const handleMouseDown = (e: MouseEvent) => {
 
       if (!isMeasuring.value) {
         // 开始测距
+        console.log('开始测距')
         isMeasuring.value = true
         isMeasurePending.value = false
         measureStart.value = finalPoint
@@ -1234,14 +1423,19 @@ const handleMouseDown = (e: MouseEvent) => {
         canMeasureDrag.value = false
       } else {
         // 结束测距，保存到列表
+        console.log('结束测距，isDoubleClick:', isDoubleClick, 'clickedMeasurement:', clickedMeasurement)
         if (measureStart.value) {
           const distance = calculateDistance(measureStart.value, finalPoint)
-          measurements.value.push({
+          const newMeasurement = {
             id: generateId(),
             start: { ...measureStart.value },
             end: { ...finalPoint },
             distance
-          })
+          }
+          measurements.value.push(newMeasurement)
+          // 自动选中新创建的测距线
+          selectedMeasurementId.value = newMeasurement.id
+          console.log('测距线已保存并选中:', newMeasurement.id, 'selectedMeasurementId:', selectedMeasurementId.value)
         }
         isMeasuring.value = false
         isMeasurePending.value = false
@@ -1398,6 +1592,7 @@ const deleteGeometry = (id: string) => {
     geometries.value.splice(index, 1)
     if (selectedId.value === id) {
       selectedId.value = null
+      selectedEdge.value = null
     }
     if (hoveredId.value === id) {
       hoveredId.value = null
@@ -1453,6 +1648,7 @@ const clearAll = () => {
   if (confirm('确定要清空所有图形吗？')) {
     geometries.value = []
     selectedId.value = null
+    selectedEdge.value = null
     hoveredId.value = null
     hoveredVertex.value = null
     scheduleDraw()
@@ -1678,11 +1874,27 @@ onUnmounted(() => {
       </div>
 
       <!-- 选中多边形信息 -->
-      <div v-if="selectedPolygon" class="info-item polygon-info">
+      <div v-if="selectedPolygon && !selectedEdge" class="info-item polygon-info">
         <span class="info-label polygon-name" :style="{ color: selectedPolygon.color }">{{ selectedPolygon.name }}</span>
         <span class="info-value">顶点: {{ selectedPolygon.points.length }}</span>
         <span class="info-value">面积: {{ calculatePolygonArea(selectedPolygon.points).toFixed(2) }}</span>
         <span class="info-value">周长: {{ calculatePolygonPerimeter(selectedPolygon.points).toFixed(2) }}</span>
+      </div>
+
+      <!-- 选中边信息 -->
+      <div v-if="selectedEdge" class="info-item edge-info">
+        <span class="info-label">边 {{ selectedEdge.edgeIndex + 1 }}</span>
+        <span class="info-value">长度: {{ calculateDistance(selectedEdge.start, selectedEdge.end).toFixed(2) }}</span>
+        <span class="info-value">起点: ({{ selectedEdge.start.x.toFixed(1) }}, {{ selectedEdge.start.y.toFixed(1) }})</span>
+        <span class="info-value">终点: ({{ selectedEdge.end.x.toFixed(1) }}, {{ selectedEdge.end.y.toFixed(1) }})</span>
+      </div>
+
+      <!-- 选中测距线信息 -->
+      <div v-if="selectedMeasurement" class="info-item measurement-info">
+        <span class="info-label">测距线</span>
+        <span class="info-value">距离: {{ calculateDistance(selectedMeasurement.start, selectedMeasurement.end).toFixed(2) }}</span>
+        <span class="info-value">起点: ({{ selectedMeasurement.start.x.toFixed(1) }}, {{ selectedMeasurement.start.y.toFixed(1) }})</span>
+        <span class="info-value">终点: ({{ selectedMeasurement.end.x.toFixed(1) }}, {{ selectedMeasurement.end.y.toFixed(1) }})</span>
       </div>
     </div>
 
@@ -2012,6 +2224,16 @@ onUnmounted(() => {
 .info-item.polygon-info {
   border-color: rgba(0, 255, 136, 0.5);
   box-shadow: 0 0 30px rgba(0, 255, 136, 0.3);
+}
+
+.info-item.edge-info {
+  border-color: rgba(255, 105, 180, 0.5);
+  box-shadow: 0 0 30px rgba(255, 105, 180, 0.3);
+}
+
+.info-item.measurement-info {
+  border-color: rgba(0, 245, 255, 0.5);
+  box-shadow: 0 0 30px rgba(0, 245, 255, 0.3);
 }
 
 .info-label.polygon-name {
