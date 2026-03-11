@@ -19,23 +19,17 @@ export {
   generateNonOverlappingPolygons,
   checkPolygonOverlap,
   expandPolygon
-} from './polygonGenerator'
+} from './geometryGenerator'
 
 // 3D 点解析
 export {
   parse3DPoints,
-  is3DFormat,
-  project3DTo2D
+  is3DFormat
 } from './geometry3d'
 
 // Canvas 渲染
 export {
   drawGeometry,
-  drawMeasurement,
   drawGrid,
-  drawSnapIndicator,
-  drawMeasurePreview,
-  drawMeasurementDeleteButton,
-  drawMeasurementHighlight,
   detectHover
 } from './canvasRenderer'

@@ -1,4 +1,4 @@
-import type { Point, Polygon, GeometryType } from '@/types'
+import type { Point, Polygon } from '@/types'
 import { GeometryType } from '@/types'
 
 // 生成随机多边形

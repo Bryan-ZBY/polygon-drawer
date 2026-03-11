@@ -12,6 +12,7 @@ import {
   isPointInPolygon
 } from '@/utils/canvasRenderer'
 import { generateNonOverlappingPolygon } from '@/utils/geometryGenerator'
+import { calculateBoundingBox } from '@/utils/geometry'
 import DraggablePanel from '@/components/DraggablePanel.vue'
 import GeometryList from '@/components/GeometryList.vue'
 import RealtimeInput from '@/components/RealtimeInput.vue'
@@ -1795,6 +1796,10 @@ const addGeometry = (partialGeometry: Omit<Geometry, 'id' | 'name' | 'color'>, i
 
   if (!isRealtime) {
     selectedId.value = newGeometry.id
+    // 如果是第一个图形，自适应缩放
+    if (geometries.value.length === 1) {
+      fitViewToGeometry(newGeometry)
+    }
     saveToHistory() // 保存历史记录
   }
   scheduleDraw()
@@ -1826,6 +1831,10 @@ const addPolygonGroup = (partialGroup: Omit<PolygonGroup, 'id' | 'name' | 'color
   }
 
   selectedId.value = newGroup.id
+  // 如果是第一个图形，自适应缩放
+  if (geometries.value.length === 1) {
+    fitViewToGeometry(newGroup)
+  }
   saveToHistory() // 保存历史记录
   scheduleDraw()
 }
@@ -1922,6 +1931,71 @@ const cancelRename = () => {
 const resetView = () => {
   viewState.value = { scale: 1, offsetX: 0, offsetY: 0 }
   scheduleDraw()
+}
+
+// 自适应缩放视图以适应新添加的图形
+const fitViewToGeometry = (geometry: Geometry) => {
+  const canvas = canvasRef.value
+  if (!canvas) return
+
+  // 计算图形的边界框
+  let bbox: { minX: number; maxX: number; minY: number; maxY: number } | null = null
+
+  if (geometry.type === 'polygon') {
+    const polygon = geometry as Polygon
+    bbox = calculateBoundingBox(polygon.points)
+  } else if (geometry.type === 'group') {
+    const group = geometry as PolygonGroup
+    // 计算组内所有多边形的总边界框
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const polygon of group.polygons) {
+      const polyBbox = calculateBoundingBox(polygon.points)
+      minX = Math.min(minX, polyBbox.minX)
+      maxX = Math.max(maxX, polyBbox.maxX)
+      minY = Math.min(minY, polyBbox.minY)
+      maxY = Math.max(maxY, polyBbox.maxY)
+    }
+    if (minX !== Infinity) {
+      bbox = { minX, maxX, minY, maxY }
+    }
+  }
+
+  if (!bbox) return
+
+  // 计算图形的中心和尺寸
+  const centerX = (bbox.minX + bbox.maxX) / 2
+  const centerY = (bbox.minY + bbox.maxY) / 2
+  const width = bbox.maxX - bbox.minX
+  const height = bbox.maxY - bbox.minY
+
+  // 画布尺寸（留边距）- 使图形占据画面约四分之一
+  // 画面四分之一意味着图形尺寸约为画布尺寸的一半（因为 0.5 * 0.5 = 0.25）
+  const targetRatio = 0.5 // 目标比例：图形尺寸 / 画布尺寸
+  const availableWidth = canvas.width * targetRatio
+  const availableHeight = canvas.height * targetRatio
+
+  // 计算合适的缩放比例
+  let scale = 1
+  if (width > 0 && height > 0) {
+    const scaleX = availableWidth / width
+    const scaleY = availableHeight / height
+    scale = Math.min(scaleX, scaleY)
+  }
+
+  // 限制缩放范围
+  scale = Math.max(0.1, Math.min(100, scale))
+
+  // 计算偏移量，使图形居中显示在屏幕中间
+  // 根据 worldToScreen 函数：
+  // screenX = canvasWidth/2 + worldX * scale + offsetX
+  // screenY = canvasHeight/2 - worldY * scale + offsetY
+  // 要让图形中心点(centerX, centerY)显示在画布中心：
+  // canvasWidth/2 = canvasWidth/2 + centerX * scale + offsetX  =>  offsetX = -centerX * scale
+  // canvasHeight/2 = canvasHeight/2 - centerY * scale + offsetY  =>  offsetY = centerY * scale
+
+  viewState.value.scale = scale
+  viewState.value.offsetX = -centerX * scale
+  viewState.value.offsetY = centerY * scale
 }
 
 // 清空所有
@@ -2063,7 +2137,7 @@ const handleWheel = (e: WheelEvent) => {
   const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1
   const newScale = viewState.value.scale * scaleFactor
 
-  if (newScale < 0.1 || newScale > 10) return
+  if (newScale < 0.1 || newScale > 100) return
 
   // 获取鼠标在画布上的位置
   const rect = canvas.getBoundingClientRect()
