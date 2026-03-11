@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import type { Geometry, Polygon, ViewState, Point } from '@/types'
+import type { Geometry, Polygon, PolygonGroup, ViewState, Point } from '@/types'
 import { generateId, getNextColor } from '@/types'
 import { 
   clearCanvas, 
@@ -271,19 +271,50 @@ const drawAll = () => {
   // 绘制所有可见图形
   geometries.value.forEach(geometry => {
     if (geometry.visible) {
-      const isHovered = hoveredId.value === geometry.id
-      const isSelected = selectedId.value === geometry.id
-      // 传递当前悬停顶点或最后经过的顶点
-      const activeVertex = hoveredVertex.value || lastHoveredVertex.value
-      drawGeometry(ctx, geometry, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex)
+      // 处理多边形组
+      if (geometry.type === 'group') {
+        const group = geometry as PolygonGroup
+        group.polygons.forEach(polygon => {
+          if (polygon.visible) {
+            const isHovered = hoveredId.value === polygon.id
+            const isSelected = selectedId.value === polygon.id || (group.collapsed && selectedId.value === group.id)
+            const activeVertex = hoveredVertex.value || lastHoveredVertex.value
+            drawGeometry(ctx, polygon, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex)
+          }
+        })
+      } else {
+        const isHovered = hoveredId.value === geometry.id
+        const isSelected = selectedId.value === geometry.id
+        const activeVertex = hoveredVertex.value || lastHoveredVertex.value
+        drawGeometry(ctx, geometry, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex)
+      }
     }
   })
 
   // 绘制选中边的高亮
   if (selectedEdge.value) {
+    // 查找多边形（可能在 geometries 中，也可能在组内）
+    let polygon: Polygon | undefined
+    
+    // 先在 geometries 中查找
     const geometry = geometries.value.find(g => g.id === selectedEdge.value?.polygonId)
-    if (geometry && geometry.visible && geometry.type === 'polygon') {
-      const polygon = geometry as Polygon
+    if (geometry && geometry.type === 'polygon') {
+      polygon = geometry as Polygon
+    } else {
+      // 在组内查找
+      for (const g of geometries.value) {
+        if (g.type === 'group') {
+          const group = g as PolygonGroup
+          const found = group.polygons.find(p => p.id === selectedEdge.value?.polygonId)
+          if (found) {
+            polygon = found
+            break
+          }
+        }
+      }
+    }
+    
+    if (polygon && polygon.visible) {
       const start = worldToScreen(selectedEdge.value.start)
       const end = worldToScreen(selectedEdge.value.end)
       
@@ -833,32 +864,57 @@ const detectMeasurementClick = (worldPos: Point): { id: string; measurement: { i
 }
 
 // 检测是否点击了多边形或边（用于选中）
-const detectPolygonClick = (worldPos: Point): { polygon: Polygon; edgeIndex?: number } | null => {
+const detectPolygonClick = (worldPos: Point): { polygon: Polygon; edgeIndex?: number; groupId?: string } | null => {
   const CLICK_THRESHOLD = 10 / viewState.value.scale // 10像素的点击阈值
-  
+
   // 倒序遍历，优先检测上层图形
   for (let i = geometries.value.length - 1; i >= 0; i--) {
     const geometry = geometries.value[i]
     if (!geometry.visible) continue
-    
+
     if (geometry.type === 'polygon') {
       const polygon = geometry as Polygon
-      
+
       // 先检测是否点击了边
       const points = polygon.points
       for (let j = 0; j < points.length; j++) {
         const a = points[j]
         const b = points[(j + 1) % points.length]
         const { distance } = pointToSegmentDistance(worldPos, a, b)
-        
+
         if (distance < CLICK_THRESHOLD) {
           return { polygon, edgeIndex: j }
         }
       }
-      
+
       // 再检测是否点击了多边形内部
       if (isPointInPolygon(worldPos, polygon.points)) {
         return { polygon }
+      }
+    } else if (geometry.type === 'group') {
+      // 检测多边形组内的多边形
+      const group = geometry as PolygonGroup
+      // 倒序遍历组内的多边形
+      for (let k = group.polygons.length - 1; k >= 0; k--) {
+        const polygon = group.polygons[k]
+        if (!polygon.visible) continue
+
+        // 先检测是否点击了边
+        const points = polygon.points
+        for (let j = 0; j < points.length; j++) {
+          const a = points[j]
+          const b = points[(j + 1) % points.length]
+          const { distance } = pointToSegmentDistance(worldPos, a, b)
+
+          if (distance < CLICK_THRESHOLD) {
+            return { polygon, edgeIndex: j, groupId: group.id }
+          }
+        }
+
+        // 再检测是否点击了多边形内部
+        if (isPointInPolygon(worldPos, polygon.points)) {
+          return { polygon, groupId: group.id }
+        }
       }
     }
   }
@@ -972,46 +1028,88 @@ const detectSnap = (worldPos: Point): {
   let isPerpendicular = false
   let perpendicularTo: 'measurement' | 'polygon' | undefined = undefined
 
-  // 检测顶点吸附
+  // 检测顶点吸附（包括多边形组内的多边形）
   for (const geometry of geometries.value) {
-    if (!geometry.visible || geometry.type !== 'polygon') continue
+    if (!geometry.visible) continue
 
-    const polygon = geometry as Polygon
-    for (const point of polygon.points) {
-      const dist = Math.sqrt(
-        Math.pow(point.x - worldPos.x, 2) +
-        Math.pow(point.y - worldPos.y, 2)
-      )
-      const screenDist = dist * viewState.value.scale
+    // 处理多边形组
+    if (geometry.type === 'group') {
+      const group = geometry as PolygonGroup
+      for (const polygon of group.polygons) {
+        if (!polygon.visible) continue
+        for (const point of polygon.points) {
+          const dist = Math.sqrt(
+            Math.pow(point.x - worldPos.x, 2) +
+            Math.pow(point.y - worldPos.y, 2)
+          )
+          const screenDist = dist * viewState.value.scale
 
-      if (screenDist < SNAP_THRESHOLD && screenDist < minDist) {
-        minDist = screenDist
-        snapPoint = point
-        snapType = 'vertex'
+          if (screenDist < SNAP_THRESHOLD && screenDist < minDist) {
+            minDist = screenDist
+            snapPoint = point
+            snapType = 'vertex'
+          }
+        }
+      }
+    } else if (geometry.type === 'polygon') {
+      const polygon = geometry as Polygon
+      for (const point of polygon.points) {
+        const dist = Math.sqrt(
+          Math.pow(point.x - worldPos.x, 2) +
+          Math.pow(point.y - worldPos.y, 2)
+        )
+        const screenDist = dist * viewState.value.scale
+
+        if (screenDist < SNAP_THRESHOLD && screenDist < minDist) {
+          minDist = screenDist
+          snapPoint = point
+          snapType = 'vertex'
+        }
       }
     }
   }
 
-  // 检测边吸附（顶点吸附优先）
+  // 检测边吸附（顶点吸附优先，包括多边形组内的多边形）
   let edgeSnapPoint: Point | null = null
   let edgeMinDist = Infinity
   let bestEdge: { a: Point; b: Point } | null = null
   if (snapType === 'none') {
     for (const geometry of geometries.value) {
-      if (!geometry.visible || geometry.type !== 'polygon') continue
+      if (!geometry.visible) continue
 
-      const polygon = geometry as Polygon
-      const points = polygon.points
-      for (let i = 0; i < points.length; i++) {
-        const a = points[i]
-        const b = points[(i + 1) % points.length]
-        const { distance, closestPoint } = pointToSegmentDistance(worldPos, a, b)
-        const screenDist = distance * viewState.value.scale
+      // 处理多边形组
+      if (geometry.type === 'group') {
+        const group = geometry as PolygonGroup
+        for (const polygon of group.polygons) {
+          if (!polygon.visible) continue
+          const points = polygon.points
+          for (let i = 0; i < points.length; i++) {
+            const a = points[i]
+            const b = points[(i + 1) % points.length]
+            const { distance, closestPoint } = pointToSegmentDistance(worldPos, a, b)
+            const screenDist = distance * viewState.value.scale
 
-        if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < edgeMinDist) {
-          edgeMinDist = screenDist
-          edgeSnapPoint = closestPoint
-          bestEdge = { a, b }
+            if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < edgeMinDist) {
+              edgeMinDist = screenDist
+              edgeSnapPoint = closestPoint
+              bestEdge = { a, b }
+            }
+          }
+        }
+      } else if (geometry.type === 'polygon') {
+        const polygon = geometry as Polygon
+        const points = polygon.points
+        for (let i = 0; i < points.length; i++) {
+          const a = points[i]
+          const b = points[(i + 1) % points.length]
+          const { distance, closestPoint } = pointToSegmentDistance(worldPos, a, b)
+          const screenDist = distance * viewState.value.scale
+
+          if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < edgeMinDist) {
+            edgeMinDist = screenDist
+            edgeSnapPoint = closestPoint
+            bestEdge = { a, b }
+          }
         }
       }
     }
@@ -1056,33 +1154,67 @@ const detectSnap = (worldPos: Point): {
       }
     }
 
-    // 检测与多边形边的垂直关系
+    // 检测与多边形边的垂直关系（包括多边形组内的多边形）
     for (const geometry of geometries.value) {
-      if (!geometry.visible || geometry.type !== 'polygon') continue
-      
-      const polygon = geometry as Polygon
-      const points = polygon.points
-      for (let i = 0; i < points.length; i++) {
-        const a = points[i]
-        const b = points[(i + 1) % points.length]
-        
-        // 计算从测距起点到边的垂足
-        const foot = getPerpendicularFoot(start, a, b)
-        
-        // 检查垂足是否在边线段上
-        const { distance: distFromSegment } = pointToSegmentDistance(foot, a, b)
-        const isFootOnSegment = distFromSegment < 0.001
-        
-        if (isFootOnSegment) {
-          // 计算鼠标位置到垂足的距离
-          const distToFoot = Math.sqrt(
-            Math.pow(foot.x - currentEnd.x, 2) + 
-            Math.pow(foot.y - currentEnd.y, 2)
-          )
-          
-          if (distToFoot < PERP_SNAP_DISTANCE) {
-            if (!bestPerpSnap || distToFoot < bestPerpSnap.distance) {
-              bestPerpSnap = { point: foot, distance: distToFoot, target: 'polygon' }
+      if (!geometry.visible) continue
+
+      // 处理多边形组
+      if (geometry.type === 'group') {
+        const group = geometry as PolygonGroup
+        for (const polygon of group.polygons) {
+          if (!polygon.visible) continue
+          const points = polygon.points
+          for (let i = 0; i < points.length; i++) {
+            const a = points[i]
+            const b = points[(i + 1) % points.length]
+
+            // 计算从测距起点到边的垂足
+            const foot = getPerpendicularFoot(start, a, b)
+
+            // 检查垂足是否在边线段上
+            const { distance: distFromSegment } = pointToSegmentDistance(foot, a, b)
+            const isFootOnSegment = distFromSegment < 0.001
+
+            if (isFootOnSegment) {
+              // 计算鼠标位置到垂足的距离
+              const distToFoot = Math.sqrt(
+                Math.pow(foot.x - currentEnd.x, 2) +
+                Math.pow(foot.y - currentEnd.y, 2)
+              )
+
+              if (distToFoot < PERP_SNAP_DISTANCE) {
+                if (!bestPerpSnap || distToFoot < bestPerpSnap.distance) {
+                  bestPerpSnap = { point: foot, distance: distToFoot, target: 'polygon' }
+                }
+              }
+            }
+          }
+        }
+      } else if (geometry.type === 'polygon') {
+        const polygon = geometry as Polygon
+        const points = polygon.points
+        for (let i = 0; i < points.length; i++) {
+          const a = points[i]
+          const b = points[(i + 1) % points.length]
+
+          // 计算从测距起点到边的垂足
+          const foot = getPerpendicularFoot(start, a, b)
+
+          // 检查垂足是否在边线段上
+          const { distance: distFromSegment } = pointToSegmentDistance(foot, a, b)
+          const isFootOnSegment = distFromSegment < 0.001
+
+          if (isFootOnSegment) {
+            // 计算鼠标位置到垂足的距离
+            const distToFoot = Math.sqrt(
+              Math.pow(foot.x - currentEnd.x, 2) +
+              Math.pow(foot.y - currentEnd.y, 2)
+            )
+
+            if (distToFoot < PERP_SNAP_DISTANCE) {
+              if (!bestPerpSnap || distToFoot < bestPerpSnap.distance) {
+                bestPerpSnap = { point: foot, distance: distToFoot, target: 'polygon' }
+              }
             }
           }
         }
@@ -1622,7 +1754,7 @@ const handleKeyDown = (e: KeyboardEvent) => {
 }
 
 // 添加图形
-const addGeometry = (partialGeometry: Omit<Geometry, 'id' | 'name' | 'color'>, isRealtime: boolean = false) => {
+const addGeometry = (partialGeometry: Omit<Geometry, 'id' | 'name' | 'color'>, isRealtime: boolean = false, originalData?: any) => {
   errorMsg.value = ''
 
   // 如果是实时输入，先移除之前通过实时输入添加的图形
@@ -1641,11 +1773,62 @@ const addGeometry = (partialGeometry: Omit<Geometry, 'id' | 'name' | 'color'>, i
   } as Geometry
 
   geometries.value.push(newGeometry)
+
+  // 保存原始输入数据
+  if (originalData) {
+    originalInputData.value.set(newGeometry.id, originalData)
+  }
+
   if (!isRealtime) {
     selectedId.value = newGeometry.id
     saveToHistory() // 保存历史记录
   }
   scheduleDraw()
+}
+
+// 添加多边形组
+const addPolygonGroup = (partialGroup: Omit<PolygonGroup, 'id' | 'name' | 'color'>, originalData?: any[]) => {
+  errorMsg.value = ''
+
+  const newGroup: PolygonGroup = {
+    ...partialGroup,
+    id: generateId(),
+    name: `多边形组 ${geometries.value.length + 1}`,
+    color: getNextColor()
+  }
+
+  geometries.value.push(newGroup)
+
+  // 保存原始输入数据（为每个多边形保存对应的原始边数据）
+  if (originalData && Array.isArray(originalData)) {
+    newGroup.polygons.forEach((polygon, index) => {
+      if (originalData[index]) {
+        originalInputData.value.set(polygon.id, originalData[index])
+      }
+    })
+  }
+
+  selectedId.value = newGroup.id
+  saveToHistory() // 保存历史记录
+  scheduleDraw()
+}
+
+// 切换多边形组的折叠状态
+const toggleGroupCollapse = (groupId: string) => {
+  const group = geometries.value.find(g => g.id === groupId && g.type === 'group') as PolygonGroup | undefined
+  if (group) {
+    group.collapsed = !group.collapsed
+    scheduleDraw()
+  }
+}
+
+// 选择多边形组内的多边形
+const selectGroupPolygon = (groupId: string, polygonId: string) => {
+  const group = geometries.value.find(g => g.id === groupId && g.type === 'group') as PolygonGroup | undefined
+  if (group && !group.collapsed) {
+    selectedId.value = polygonId
+    scheduleDraw()
+  }
 }
 
 // 生成随机测试多边形
@@ -1740,11 +1923,14 @@ const clearAll = () => {
 }
 
 // 打印图形信息到控制台
+// 存储原始输入数据
+const originalInputData = ref<Map<string, any>>(new Map())
+
 const printGeometries = () => {
   console.log('%c=== 图形列表信息 ===', 'color: #00f5ff; font-size: 16px; font-weight: bold;')
-  console.log(`总计: ${geometries.value.length} 个图形`)
+  console.log(`总计: ${geometries.value.length} 个图形/组`)
   console.log('')
-  
+
   // 输出对象数组
   const geometryObjects = geometries.value.map((geometry, index) => {
     const obj: any = {
@@ -1755,7 +1941,7 @@ const printGeometries = () => {
       color: geometry.color,
       visible: geometry.visible
     }
-    
+
     if (geometry.type === 'polygon') {
       const polygon = geometry as Polygon
       obj.pointCount = polygon.points.length
@@ -1764,20 +1950,60 @@ const printGeometries = () => {
         x: p.x,
         y: p.y
       }))
+      // 添加原始输入数据
+      const originalData = originalInputData.value.get(polygon.id)
+      if (originalData) {
+        obj.originalData = originalData
+      }
+    } else if (geometry.type === 'group') {
+      const group = geometry as PolygonGroup
+      obj.polygonCount = group.polygons.length
+      obj.collapsed = group.collapsed
+      obj.polygons = group.polygons.map((p, i) => ({
+        index: i + 1,
+        id: p.id,
+        name: p.name,
+        pointCount: p.points.length,
+        points: p.points.map((pt, j) => ({
+          index: j + 1,
+          x: pt.x,
+          y: pt.y
+        })),
+        // 添加原始输入数据
+        originalData: originalInputData.value.get(p.id) || null
+      }))
     }
-    
+
     return obj
   })
-  
-  // 使用 console.table 输出表格
-  console.table(geometryObjects)
-  
+
+  // 使用 console.table 输出表格（简化版）
+  const tableData = geometryObjects.map(obj => ({
+    序号: obj.index,
+    名称: obj.name,
+    类型: obj.type === 'group' ? '多边形组' : '多边形',
+    点数: obj.pointCount || obj.polygonCount || '-',
+    可见: obj.visible ? '是' : '否',
+    颜色: obj.color
+  }))
+  console.table(tableData)
+
   // 详细输出每个图形对象
-  console.log('%c详细对象数据:', 'color: #ff6b6b; font-size: 12px;')
+  console.log('%c详细对象数据（含原始输入）:', 'color: #ff6b6b; font-size: 12px;')
   geometryObjects.forEach((obj, i) => {
-    console.log(`%c[${i + 1}] ${obj.name}:`, 'color: #00f5ff; font-weight: bold;', obj)
+    console.log(`%c[${i + 1}] ${obj.name}:`, 'color: #00f5ff; font-weight: bold;')
+    console.log('  处理后的数据:', obj)
+    // 打印原始输入数据
+    if (obj.type === 'polygon' && obj.originalData) {
+      console.log('  原始输入数据:', obj.originalData)
+    } else if (obj.type === 'group' && obj.polygons) {
+      console.log('  组内多边形原始输入:')
+      obj.polygons.forEach((p: any) => {
+        console.log(`    [${p.index}] ${p.name}:`, p.originalData || '无原始数据')
+      })
+    }
   })
-  
+
   console.log('%c=== 视图状态 ===', 'color: #00f5ff; font-size: 14px; font-weight: bold;')
   console.log('缩放比例:', (viewState.value.scale * 100).toFixed(0) + '%')
   console.log('偏移 X:', viewState.value.offsetX.toFixed(2))
@@ -1866,6 +2092,7 @@ onUnmounted(() => {
       <template #default>
         <RealtimeInput
           @add="addGeometry"
+          @add-group="addPolygonGroup"
           @generate-random="generateRandomTestPolygon"
           @print-geometries="printGeometries"
           :geometries-count="geometries.length"
@@ -1887,7 +2114,9 @@ onUnmounted(() => {
           :geometries="geometries"
           :selected-id="selectedId"
           @select="selectGeometry"
+          @select-group-polygon="selectGroupPolygon"
           @toggle-visibility="toggleVisibility"
+          @toggle-group-collapse="toggleGroupCollapse"
           @start-rename="startRename"
           @delete="deleteGeometry"
         />

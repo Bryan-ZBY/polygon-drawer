@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import type { Geometry, Polygon, ParseResult } from '@/types'
-import { GeometryType } from '@/types'
+import type { Geometry, Polygon, PolygonGroup, ParseResult } from '@/types'
+import { GeometryType, generateId, getNextColor } from '@/types'
 import { parse3DPoints, is3DFormat } from '@/utils/geometry3d'
 
 interface Props {
@@ -11,7 +11,8 @@ interface Props {
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
-  add: [geometry: Omit<Geometry, 'id' | 'name' | 'color'>, isRealtime: boolean]
+  add: [geometry: Omit<Geometry, 'id' | 'name' | 'color'>, isRealtime: boolean, originalData?: any]
+  addGroup: [group: Omit<PolygonGroup, 'id' | 'name' | 'color'>, originalData?: any[]]
   generateRandom: []
   printGeometries: []
 }>()
@@ -36,6 +37,11 @@ const parsePolygon = (input: string): ParseResult<Polygon> => {
     
     if (data.length === 0) {
       return { success: false, error: '' }
+    }
+    
+    // 检查是否是嵌套的边数据格式（多边形组）
+    if (Array.isArray(data[0])) {
+      return { success: false, error: 'GROUP_FORMAT' } // 特殊标记，表示是多边形组格式
     }
     
     // 检查是否是边数据格式（包含 P1, P2 属性）
@@ -162,6 +168,83 @@ const parseEdgesFormat = (edges: any[]): ParseResult<Polygon> => {
   }
 }
 
+// 解析多边形组格式（支持边数据格式或点数组格式）
+const parsePolygonGroup = (data: any[]): { success: boolean; group?: Omit<PolygonGroup, 'id' | 'name' | 'color'>; error?: string } => {
+  try {
+    const polygons: Polygon[] = []
+
+    for (let i = 0; i < data.length; i++) {
+      const polygonData = data[i]
+
+      if (!Array.isArray(polygonData)) {
+        return { success: false, error: `第 ${i + 1} 个多边形数据必须是数组` }
+      }
+
+      if (polygonData.length === 0) {
+        return { success: false, error: `第 ${i + 1} 个多边形数据不能为空` }
+      }
+
+      let polygon: Polygon | null = null
+
+      // 检测数据格式：边数据格式（包含 P1, P2）或点数组格式（包含 X, Y 或 x, y）
+      if (polygonData[0] && (polygonData[0].P1 || polygonData[0].P2)) {
+        // 边数据格式
+        const result = parseEdgesFormat(polygonData)
+        if (!result.success || !result.data) {
+          return { success: false, error: `第 ${i + 1} 个多边形解析失败: ${result.error}` }
+        }
+        polygon = result.data
+      } else if (polygonData[0] && (typeof polygonData[0].X === 'number' || typeof polygonData[0].x === 'number')) {
+        // 点数组格式（支持大写 X, Y 或小写 x, y）
+        const points = polygonData.map((p: any) => ({
+          x: typeof p.X === 'number' ? p.X : p.x,
+          y: typeof p.Y === 'number' ? p.Y : p.y
+        })).filter((p: any) => typeof p.x === 'number' && typeof p.y === 'number')
+
+        if (points.length < 3) {
+          return { success: false, error: `第 ${i + 1} 个多边形至少需要3个有效点` }
+        }
+
+        polygon = {
+          id: '',
+          name: '',
+          type: GeometryType.POLYGON,
+          points,
+          visible: true,
+          color: ''
+        }
+      } else {
+        return { success: false, error: `第 ${i + 1} 个多边形数据格式不正确，需要边数据格式或点数组格式` }
+      }
+
+      if (polygon) {
+        polygons.push({
+          ...polygon,
+          id: generateId(),
+          name: `多边形 ${i + 1}`,
+          color: getNextColor()
+        })
+      }
+    }
+
+    if (polygons.length === 0) {
+      return { success: false, error: '至少需要1个多边形' }
+    }
+
+    return {
+      success: true,
+      group: {
+        type: 'group',
+        polygons,
+        visible: true,
+        collapsed: false
+      }
+    }
+  } catch (e) {
+    return { success: false, error: '多边形组解析错误' }
+  }
+}
+
 // 监听输入变化，实时绘制
 watch(inputText, () => {
   localError.value = ''
@@ -189,21 +272,55 @@ watch(inputText, () => {
         localError.value = result3D.error || ''
       }
     }
-  } else {
-    is3DMode.value = false
-    const result = parsePolygon(inputText.value)
-
-    if (result.success && result.data) {
-      isValid.value = true
-      // 每次都创建新图形，isRealtime 设为 false
-      emit('add', result.data, false)
-      // 输入合法并成功绘制后，清空输入框
-      inputText.value = ''
-    } else {
-      isValid.value = false
-      if (inputText.value.trim()) {
-        localError.value = result.error || ''
+    return
+  }
+  
+  // 检查是否是多边形组格式（嵌套数组）
+  try {
+    const data = JSON.parse(inputText.value)
+    if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0])) {
+      // 是多边形组格式
+      const result = parsePolygonGroup(data)
+      if (result.success && result.group) {
+        isValid.value = true
+        is3DMode.value = false
+        // 传递原始输入数据
+        emit('addGroup', result.group, data)
+        // 输入合法并成功绘制后，清空输入框
+        inputText.value = ''
+      } else {
+        isValid.value = false
+        if (inputText.value.trim()) {
+          localError.value = result.error || ''
+        }
       }
+      return
+    }
+  } catch (e) {
+    // 不是JSON格式，继续尝试其他格式
+  }
+
+  // 普通多边形格式
+  is3DMode.value = false
+  const result = parsePolygon(inputText.value)
+
+  if (result.success && result.data) {
+    isValid.value = true
+    // 解析原始输入数据
+    let originalData: any = null
+    try {
+      originalData = JSON.parse(inputText.value)
+    } catch (e) {
+      // 解析失败则不保存原始数据
+    }
+    // 每次都创建新图形，isRealtime 设为 false，并传递原始数据
+    emit('add', result.data, false, originalData)
+    // 输入合法并成功绘制后，清空输入框
+    inputText.value = ''
+  } else {
+    isValid.value = false
+    if (inputText.value.trim()) {
+      localError.value = result.error || ''
     }
   }
 })

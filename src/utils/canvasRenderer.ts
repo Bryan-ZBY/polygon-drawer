@@ -1,6 +1,7 @@
 import type { 
   Point, 
   Polygon, 
+  PolygonGroup,
   Line, 
   Circle, 
   Rectangle, 
@@ -255,30 +256,30 @@ export const detectHover = (
   viewState: ViewState,
   canvasWidth: number,
   canvasHeight: number
-): { 
+): {
   hoveredGeometryId: string | null
   hoveredVertex: { geometryId: string; vertexIndex: number; point: Point } | null
 } => {
   let hoveredGeometryId: string | null = null
   let hoveredVertex: { geometryId: string; vertexIndex: number; point: Point } | null = null
   let minVertexDistance = Infinity
-  
+
   // 转换为世界坐标
   const worldMouse = screenToWorld(mouseX, mouseY, viewState, canvasWidth, canvasHeight)
-  
+
   // 倒序遍历，优先检测上层图形
   for (let i = geometries.length - 1; i >= 0; i--) {
     const geometry = geometries[i]
     if (!geometry.visible) continue
-    
+
     if (geometry.type === GeometryType.POLYGON) {
       const polygon = geometry as Polygon
-      
+
       // 检测顶点悬停 - 使用平方距离避免开方运算
       polygon.points.forEach((p, idx) => {
         const screenP = worldToScreen(p, viewState, canvasWidth, canvasHeight)
         const distSq = Math.pow(screenP.x - mouseX, 2) + Math.pow(screenP.y - mouseY, 2)
-        
+
         // 顶点检测阈值：15像素（平方为225）
         if (distSq < 225 && distSq < minVertexDistance) {
           minVertexDistance = distSq
@@ -289,19 +290,47 @@ export const detectHover = (
           }
         }
       })
-      
+
       // 检测多边形内部悬停（如果还没有检测到顶点）
       if (!hoveredVertex && isPointInPolygon(worldMouse, polygon.points)) {
         hoveredGeometryId = geometry.id
       }
+    } else if (geometry.type === 'group') {
+      // 检测多边形组内的多边形
+      const group = geometry as PolygonGroup
+      // 倒序遍历组内的多边形
+      for (let k = group.polygons.length - 1; k >= 0; k--) {
+        const polygon = group.polygons[k]
+        if (!polygon.visible) continue
+
+        // 检测顶点悬停
+        polygon.points.forEach((p, idx) => {
+          const screenP = worldToScreen(p, viewState, canvasWidth, canvasHeight)
+          const distSq = Math.pow(screenP.x - mouseX, 2) + Math.pow(screenP.y - mouseY, 2)
+
+          if (distSq < 225 && distSq < minVertexDistance) {
+            minVertexDistance = distSq
+            hoveredVertex = {
+              geometryId: polygon.id,
+              vertexIndex: idx,
+              point: p
+            }
+          }
+        })
+
+        // 检测多边形内部悬停
+        if (!hoveredVertex && isPointInPolygon(worldMouse, polygon.points)) {
+          hoveredGeometryId = polygon.id
+        }
+      }
     }
   }
-  
+
   // 如果检测到了顶点，对应的图形也算悬停
   if (hoveredVertex && !hoveredGeometryId) {
     hoveredGeometryId = hoveredVertex.geometryId
   }
-  
+
   return { hoveredGeometryId, hoveredVertex }
 }
 

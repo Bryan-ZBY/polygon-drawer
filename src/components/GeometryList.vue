@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Geometry } from '@/types'
+import type { Geometry, PolygonGroup, Polygon } from '@/types'
 import { GeometryType } from '@/types'
 
 interface Props {
@@ -11,12 +11,14 @@ const props = defineProps<Props>()
 
 const emit = defineEmits<{
   select: [id: string]
+  selectGroupPolygon: [groupId: string, polygonId: string]
   toggleVisibility: [geometry: Geometry]
+  toggleGroupCollapse: [groupId: string]
   startRename: [geometry: Geometry]
   delete: [id: string]
 }>()
 
-const getGeometryIcon = (type: GeometryType) => {
+const getGeometryIcon = (type: GeometryType | 'group') => {
   switch (type) {
     case GeometryType.POLYGON:
       return '⬡'
@@ -26,6 +28,8 @@ const getGeometryIcon = (type: GeometryType) => {
       return '○'
     case GeometryType.RECTANGLE:
       return '▭'
+    case 'group':
+      return '▦'
     default:
       return '◆'
   }
@@ -34,7 +38,9 @@ const getGeometryIcon = (type: GeometryType) => {
 const getPointCount = (geometry: Geometry) => {
   switch (geometry.type) {
     case GeometryType.POLYGON:
-      return (geometry as any).points?.length || 0
+      return (geometry as Polygon).points?.length || 0
+    case 'group':
+      return (geometry as PolygonGroup).polygons?.length || 0
     case GeometryType.LINE:
       return 2
     case GeometryType.CIRCLE:
@@ -45,54 +51,162 @@ const getPointCount = (geometry: Geometry) => {
       return 0
   }
 }
+
+const isGroup = (geometry: Geometry): geometry is PolygonGroup => {
+  return geometry.type === 'group'
+}
+
+const isPolygonInGroupSelected = (group: PolygonGroup) => {
+  return group.polygons.some(p => p.id === props.selectedId)
+}
 </script>
 
 <template>
   <div class="geometry-list">
-    <div
-      v-for="geometry in geometries"
-      :key="geometry.id"
-      class="geometry-card"
-      :class="{ selected: selectedId === geometry.id, hidden: !geometry.visible }"
-      @click="emit('select', geometry.id)"
-    >
-
-      <div class="card-content">
-        <div class="type-icon" :style="{ color: geometry.color, opacity: geometry.visible ? 1 : 0.3 }">
-          {{ getGeometryIcon(geometry.type) }}
+    <template v-for="geometry in geometries" :key="geometry.id">
+      <!-- 多边形组 -->
+      <template v-if="isGroup(geometry)">
+        <div
+          class="geometry-card group-card"
+          :class="{ 
+            selected: selectedId === geometry.id || (geometry.collapsed && isPolygonInGroupSelected(geometry)), 
+            hidden: !geometry.visible,
+            collapsed: geometry.collapsed
+          }"
+          @click="emit('select', geometry.id)"
+        >
+          <div class="card-content">
+            <div class="type-icon group-icon" :style="{ color: geometry.color, opacity: geometry.visible ? 1 : 0.3 }">
+              {{ getGeometryIcon('group') }}
+            </div>
+            
+            <span class="card-name">{{ geometry.name }} ({{ geometry.polygons.length }})</span>
+            
+            <div class="card-actions">
+              <!-- 折叠/展开按钮 -->
+              <button 
+                class="action-btn"
+                @click.stop="emit('toggleGroupCollapse', geometry.id)"
+                :title="geometry.collapsed ? '展开' : '折叠'"
+              >
+                <svg v-if="geometry.collapsed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="6 9 12 15 18 9"></polyline>
+                </svg>
+                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="18 15 12 9 6 15"></polyline>
+                </svg>
+              </button>
+              <button 
+                class="action-btn"
+                :class="{ inactive: !geometry.visible }"
+                @click.stop="emit('toggleVisibility', geometry)"
+                :title="geometry.visible ? '隐藏' : '显示'"
+              >
+                <svg v-if="geometry.visible" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                </svg>
+              </button>
+              <button 
+                class="action-btn delete"
+                @click.stop="emit('delete', geometry.id)"
+                title="删除"
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
         </div>
         
-        <span class="card-name">{{ geometry.name }}</span>
-        
-        <div class="card-actions">
-          <button 
-            class="action-btn"
-            :class="{ inactive: !geometry.visible }"
-            @click.stop="emit('toggleVisibility', geometry)"
-            :title="geometry.visible ? '隐藏' : '显示'"
+        <!-- 组内的多边形（展开时显示） -->
+        <div v-if="!geometry.collapsed" class="group-polygons">
+          <div
+            v-for="polygon in geometry.polygons"
+            :key="polygon.id"
+            class="geometry-card polygon-in-group"
+            :class="{ selected: selectedId === polygon.id, hidden: !polygon.visible }"
+            @click.stop="emit('selectGroupPolygon', geometry.id, polygon.id)"
           >
-            <svg v-if="geometry.visible" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-              <circle cx="12" cy="12" r="3"></circle>
-            </svg>
-            <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-              <line x1="1" y1="1" x2="23" y2="23"></line>
-            </svg>
-          </button>
-          <button 
-            class="action-btn delete"
-            @click.stop="emit('delete', geometry.id)"
-            title="删除"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="3 6 5 6 21 6"></polyline>
-              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-            </svg>
-          </button>
+            <div class="card-content">
+              <div class="type-icon" :style="{ color: polygon.color, opacity: polygon.visible ? 1 : 0.3 }">
+                {{ getGeometryIcon(GeometryType.POLYGON) }}
+              </div>
+              
+              <span class="card-name">{{ polygon.name }}</span>
+              
+              <div class="card-actions">
+                <button 
+                  class="action-btn"
+                  :class="{ inactive: !polygon.visible }"
+                  @click.stop="polygon.visible = !polygon.visible"
+                  :title="polygon.visible ? '隐藏' : '显示'"
+                >
+                  <svg v-if="polygon.visible" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                  <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                    <line x1="1" y1="1" x2="23" y2="23"></line>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+      
+      <!-- 普通几何图形 -->
+      <div
+        v-else
+        class="geometry-card"
+        :class="{ selected: selectedId === geometry.id, hidden: !geometry.visible }"
+        @click="emit('select', geometry.id)"
+      >
+        <div class="card-content">
+          <div class="type-icon" :style="{ color: geometry.color, opacity: geometry.visible ? 1 : 0.3 }">
+            {{ getGeometryIcon(geometry.type) }}
+          </div>
+          
+          <span class="card-name">{{ geometry.name }}</span>
+          
+          <div class="card-actions">
+            <button 
+              class="action-btn"
+              :class="{ inactive: !geometry.visible }"
+              @click.stop="emit('toggleVisibility', geometry)"
+              :title="geometry.visible ? '隐藏' : '显示'"
+            >
+              <svg v-if="geometry.visible" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+              </svg>
+              <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                <line x1="1" y1="1" x2="23" y2="23"></line>
+              </svg>
+            </button>
+            <button 
+              class="action-btn delete"
+              @click.stop="emit('delete', geometry.id)"
+              title="删除"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </template>
   </div>
 </template>
 
@@ -162,6 +276,40 @@ const getPointCount = (geometry: Geometry) => {
   opacity: 0.4;
 }
 
+/* 组卡片样式 */
+.group-card {
+  border-color: rgba(255, 170, 0, 0.3);
+}
+
+.group-card:hover {
+  border-color: rgba(255, 170, 0, 0.5);
+}
+
+.group-card.selected {
+  background: linear-gradient(135deg, rgba(255, 170, 0, 0.12) 0%, rgba(255, 170, 0, 0.05) 100%);
+  border-color: rgba(255, 170, 0, 0.6);
+  box-shadow: 0 0 20px rgba(255, 170, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* 组内的多边形 */
+.group-polygons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 16px;
+  padding-left: 12px;
+  border-left: 2px solid rgba(255, 170, 0, 0.2);
+}
+
+.polygon-in-group {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 100%);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
+.polygon-in-group:hover {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.02) 100%);
+}
+
 .card-content {
   display: flex;
   align-items: center;
@@ -180,6 +328,10 @@ const getPointCount = (geometry: Geometry) => {
   border-radius: 6px;
   flex-shrink: 0;
   filter: drop-shadow(0 0 4px currentColor);
+}
+
+.group-icon {
+  background: rgba(255, 170, 0, 0.15);
 }
 
 .card-name {

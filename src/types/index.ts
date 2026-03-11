@@ -60,8 +60,19 @@ export interface Measurement extends BaseGeometry {
   distance: number
 }
 
+// 多边形组
+export interface PolygonGroup {
+  id: string
+  name: string
+  type: 'group'
+  visible: boolean
+  collapsed: boolean
+  polygons: Polygon[]
+  color: string
+}
+
 // 联合类型
-export type Geometry = Polygon | Line | Circle | Rectangle | Measurement
+export type Geometry = Polygon | Line | Circle | Rectangle | Measurement | PolygonGroup
 
 // 视图状态
 export interface ViewState {
