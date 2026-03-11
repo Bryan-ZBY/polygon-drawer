@@ -11,8 +11,8 @@ interface Props {
 const props = defineProps<Props>()
 
 const emit = defineEmits<{
-  add: [geometry: Omit<Geometry, 'id' | 'name' | 'color'>, isRealtime: boolean, originalData?: any]
-  addGroup: [group: Omit<PolygonGroup, 'id' | 'name' | 'color'>, originalData?: any[]]
+  add: [geometry: Omit<Geometry, 'id' | 'name' | 'color'>, isRealtime: boolean, originalData?: unknown]
+  addGroup: [group: Omit<PolygonGroup, 'id' | 'name' | 'color'>, originalData?: unknown[]]
   generateRandom: []
   printGeometries: []
 }>()
@@ -21,6 +21,42 @@ const inputText = ref('')
 const localError = ref('')
 const isValid = ref(false)
 const is3DMode = ref(false)
+const isProcessing = ref(false)
+
+// 常量配置
+const MAX_POINTS = 10000 // 最大点数限制
+const DEBOUNCE_MS = 300 // 防抖延迟
+
+// 防抖函数
+const debounce = <T extends (...args: unknown[]) => void>(fn: T, delay: number) => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null
+  return (...args: Parameters<T>) => {
+    if (timeoutId) clearTimeout(timeoutId)
+    timeoutId = setTimeout(() => fn(...args), delay)
+  }
+}
+
+// 检查数据量是否过大
+const checkDataSize = (data: unknown[]): { valid: boolean; error?: string } => {
+  let totalPoints = 0
+  
+  const countPoints = (item: unknown): number => {
+    if (Array.isArray(item)) {
+      return item.reduce((sum, subItem) => sum + countPoints(subItem), 0)
+    }
+    return 1
+  }
+  
+  totalPoints = countPoints(data)
+  
+  if (totalPoints > MAX_POINTS) {
+    return { 
+      valid: false, 
+      error: `数据量过大（${totalPoints} 个点），最多支持 ${MAX_POINTS} 个点` 
+    }
+  }
+  return { valid: true }
+}
 
 // 多边形解析器
 const parsePolygon = (input: string): ParseResult<Polygon> => {
@@ -78,7 +114,7 @@ const parsePolygon = (input: string): ParseResult<Polygon> => {
 }
 
 // 解析边数据格式
-const parseEdgesFormat = (edges: any[]): ParseResult<Polygon> => {
+const parseEdgesFormat = (edges: unknown[]): ParseResult<Polygon> => {
   try {
     const points: { x: number; y: number }[] = []
     
@@ -169,7 +205,7 @@ const parseEdgesFormat = (edges: any[]): ParseResult<Polygon> => {
 }
 
 // 将任意深度的数组扁平化为两层（多边形组格式）
-const flattenToTwoLevels = (data: any[]): any[] => {
+const flattenToTwoLevels = (data: unknown[]): unknown[] => {
   const result: any[] = []
 
   const isPolygonData = (item: any): boolean => {
@@ -202,7 +238,7 @@ const flattenToTwoLevels = (data: any[]): any[] => {
 }
 
 // 解析多边形组格式（支持边数据格式或点数组格式，支持任意深度嵌套）
-const parsePolygonGroup = (data: any[]): { success: boolean; group?: Omit<PolygonGroup, 'id' | 'name' | 'color'>; error?: string } => {
+const parsePolygonGroup = (data: unknown[]): { success: boolean; group?: Omit<PolygonGroup, 'id' | 'name' | 'color'>; error?: string } => {
   try {
     // 首先将任意深度的数组扁平化为两层
     const flattenedData = flattenToTwoLevels(data)
@@ -285,84 +321,117 @@ const parsePolygonGroup = (data: any[]): { success: boolean; group?: Omit<Polygo
   }
 }
 
-// 监听输入变化，实时绘制
-watch(inputText, () => {
-  localError.value = ''
+// 处理输入的核心逻辑
+const processInput = () => {
+  if (isProcessing.value) return
   
-  // 检查是否是三维点格式
-  if (is3DFormat(inputText.value)) {
-    is3DMode.value = true
-    const result3D = parse3DPoints(inputText.value)
-    
-    if (result3D.success && result3D.points2D) {
-      isValid.value = true
-      // 将二维点转换为多边形，每次都创建新图形
-      const polygon: Omit<Polygon, 'id' | 'name' | 'color'> = {
-        type: GeometryType.POLYGON,
-        points: result3D.points2D,
-        visible: true
-      }
-      emit('add', polygon, false)
-      // 输入合法并成功绘制后，清空输入框
-      inputText.value = ''
-      is3DMode.value = false
-    } else {
-      isValid.value = false
-      if (inputText.value.trim()) {
-        localError.value = result3D.error || ''
-      }
-    }
+  localError.value = ''
+  const text = inputText.value.trim()
+  
+  if (!text) {
+    isValid.value = false
     return
   }
   
-  // 检查是否是多边形组格式（嵌套数组）
+  isProcessing.value = true
+  
   try {
-    const data = JSON.parse(inputText.value)
-    if (Array.isArray(data) && data.length > 0 && Array.isArray(data[0])) {
-      // 是多边形组格式
-      const result = parsePolygonGroup(data)
-      if (result.success && result.group) {
+    // 检查是否是三维点格式
+    if (is3DFormat(text)) {
+      is3DMode.value = true
+      const result3D = parse3DPoints(text)
+      
+      if (result3D.success && result3D.points2D) {
+        // 检查数据量
+        const sizeCheck = checkDataSize(result3D.points2D as unknown[])
+        if (!sizeCheck.valid) {
+          localError.value = sizeCheck.error || '数据量过大'
+          isValid.value = false
+          return
+        }
+        
         isValid.value = true
-        is3DMode.value = false
-        // 传递原始输入数据
-        emit('addGroup', result.group, data)
-        // 输入合法并成功绘制后，清空输入框
+        const polygon: Omit<Polygon, 'id' | 'name' | 'color'> = {
+          type: GeometryType.POLYGON,
+          points: result3D.points2D,
+          visible: true
+        }
+        emit('add', polygon, false)
         inputText.value = ''
+        is3DMode.value = false
       } else {
         isValid.value = false
-        if (inputText.value.trim()) {
-          localError.value = result.error || ''
-        }
+        localError.value = result3D.error || ''
       }
       return
     }
-  } catch (e) {
-    // 不是JSON格式，继续尝试其他格式
-  }
-
-  // 普通多边形格式
-  is3DMode.value = false
-  const result = parsePolygon(inputText.value)
-
-  if (result.success && result.data) {
-    isValid.value = true
-    // 解析原始输入数据
-    let originalData: any = null
+    
+    // 检查是否是多边形组格式（嵌套数组）
     try {
-      originalData = JSON.parse(inputText.value)
+      const data = JSON.parse(text)
+      
+      if (!Array.isArray(data)) {
+        localError.value = '输入必须是数组格式'
+        isValid.value = false
+        return
+      }
+      
+      // 检查数据量
+      const sizeCheck = checkDataSize(data)
+      if (!sizeCheck.valid) {
+        localError.value = sizeCheck.error || '数据量过大'
+        isValid.value = false
+        return
+      }
+      
+      if (data.length > 0 && Array.isArray(data[0])) {
+        // 是多边形组格式
+        const result = parsePolygonGroup(data)
+        if (result.success && result.group) {
+          isValid.value = true
+          is3DMode.value = false
+          emit('addGroup', result.group, data)
+          inputText.value = ''
+        } else {
+          isValid.value = false
+          localError.value = result.error || ''
+        }
+        return
+      }
+      
+      // 普通多边形格式
+      is3DMode.value = false
+      const result = parsePolygon(text)
+      
+      if (result.success && result.data) {
+        isValid.value = true
+        let originalData: unknown = null
+        try {
+          originalData = JSON.parse(text)
+        } catch {
+          // 解析失败则不保存原始数据
+        }
+        emit('add', result.data, false, originalData)
+        inputText.value = ''
+      } else if (result.error && result.error !== 'GROUP_FORMAT') {
+        isValid.value = false
+        localError.value = result.error
+      }
     } catch (e) {
-      // 解析失败则不保存原始数据
+      isValid.value = false
+      localError.value = 'JSON 格式错误'
     }
-    // 每次都创建新图形，isRealtime 设为 false，并传递原始数据
-    emit('add', result.data, false, originalData)
-    // 输入合法并成功绘制后，清空输入框
-    inputText.value = ''
-  } else {
-    isValid.value = false
-    if (inputText.value.trim()) {
-      localError.value = result.error || ''
-    }
+  } finally {
+    isProcessing.value = false
   }
+}
+
+// 使用防抖处理输入
+const debouncedProcessInput = debounce(processInput, DEBOUNCE_MS)
+
+// 监听输入变化
+watch(inputText, () => {
+  debouncedProcessInput()
 })
 </script>
 
@@ -373,7 +442,8 @@ watch(inputText, () => {
         v-model="inputText"
         placeholder='粘贴点集或边数据...'
         class="glass-input"
-        :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode }"
+        :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode, processing: isProcessing }"
+        :disabled="isProcessing"
       />
       <div class="action-btns">
         <button class="btn-test" @click="emit('generateRandom')" title="生成随机测试多边形">
@@ -439,6 +509,15 @@ watch(inputText, () => {
 
 .glass-input.mode-3d {
   border-color: rgba(255, 0, 255, 0.4);
+}
+
+.glass-input.processing {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.glass-input:disabled {
+  cursor: wait;
 }
 
 .error-msg {

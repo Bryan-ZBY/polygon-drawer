@@ -76,8 +76,27 @@ export const drawGrid = (
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  viewState: ViewState
+  viewState: ViewState,
+  options: { showGrid?: boolean; gridColor?: string } = {}
 ): void => {
+  const { showGrid = true, gridColor = 'rgba(0, 245, 255, 0.06)' } = options
+  
+  if (!showGrid) {
+    // 只绘制坐标轴
+    const originX = width / 2 + viewState.offsetX
+    const originY = height / 2 + viewState.offsetY
+    
+    ctx.strokeStyle = 'rgba(0, 245, 255, 0.2)'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(originX, 0)
+    ctx.lineTo(originX, height)
+    ctx.moveTo(0, originY)
+    ctx.lineTo(width, originY)
+    ctx.stroke()
+    return
+  }
+  
   const gridSize = 50
   const screenGridSize = gridSize * viewState.scale
   
@@ -88,7 +107,7 @@ export const drawGrid = (
   const startY = centerY % screenGridSize
   
   // 批量绘制竖线
-  ctx.strokeStyle = 'rgba(0, 245, 255, 0.06)'
+  ctx.strokeStyle = gridColor
   ctx.lineWidth = 1
   ctx.beginPath()
   for (let x = startX; x <= width; x += screenGridSize) {
@@ -161,7 +180,37 @@ export const calculatePolygonPerimeter = (points: Point[]): number => {
   return perimeter
 }
 
-// 绘制多边形 - 性能优化版本
+// 检查边界框是否在视口内
+const isBoundingBoxInViewport = (
+  bbox: BoundingBox,
+  viewState: ViewState,
+  canvasWidth: number,
+  canvasHeight: number
+): boolean => {
+  // 将边界框转换为屏幕坐标
+  const screenMin = worldToScreen(
+    { x: bbox.minX, y: bbox.maxY },
+    viewState,
+    canvasWidth,
+    canvasHeight
+  )
+  const screenMax = worldToScreen(
+    { x: bbox.maxX, y: bbox.minY },
+    viewState,
+    canvasWidth,
+    canvasHeight
+  )
+  
+  // 检查是否与视口相交
+  return !(
+    screenMax.x < 0 ||
+    screenMin.x > canvasWidth ||
+    screenMax.y < 0 ||
+    screenMin.y > canvasHeight
+  )
+}
+
+// 绘制多边形 - 性能优化版本，支持视口裁剪
 export const drawPolygon = (
   ctx: CanvasRenderingContext2D,
   polygon: Polygon,
@@ -170,10 +219,19 @@ export const drawPolygon = (
   canvasHeight: number,
   isHovered: boolean,
   isSelected: boolean,
-  activeHoveredVertex: { geometryId: string; vertexIndex: number; point: Point } | null = null
+  activeHoveredVertex: { geometryId: string; vertexIndex: number; point: Point } | null = null,
+  enableCulling: boolean = true
 ): { screenPoints: Point[] } => {
   const points = polygon.points
   if (points.length < 3) return { screenPoints: [] }
+  
+  // 视口裁剪
+  if (enableCulling) {
+    const bbox = calculateBoundingBox(polygon.points)
+    if (!isBoundingBoxInViewport(bbox, viewState, canvasWidth, canvasHeight)) {
+      return { screenPoints: [] } // 多边形在视口外，跳过绘制
+    }
+  }
   
   // 检查当前多边形是否有悬停的顶点
   const hasHoveredVertex = activeHoveredVertex?.geometryId === polygon.id

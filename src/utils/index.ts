@@ -16,9 +16,8 @@ export {
 // 多边形生成
 export {
   generateRandomPolygon,
-  generateNonOverlappingPolygons,
-  checkPolygonOverlap,
-  expandPolygon
+  generateNonOverlappingPolygon as generateNonOverlappingPolygons,
+  checkBoundingBoxOverlap as checkPolygonOverlap
 } from './geometryGenerator'
 
 // 3D 点解析

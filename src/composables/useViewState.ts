@@ -10,7 +10,7 @@ export function useViewState(canvasRef: ReturnType<typeof ref<HTMLCanvasElement 
 
   const isDragging = ref(false)
   const dragStart = ref({ x: 0, y: 0 })
-  const viewDragStart = ref({ x: 0, y: 0 })
+  const viewDragStart = ref<{ scale: number; offsetX: number; offsetY: number }>({ scale: 1, offsetX: 0, offsetY: 0 })
 
   // 世界坐标转屏幕坐标（Y轴向上为正）
   const worldToScreen = (point: Point): { x: number; y: number } => {
@@ -44,7 +44,7 @@ export function useViewState(canvasRef: ReturnType<typeof ref<HTMLCanvasElement 
   const startDrag = (x: number, y: number) => {
     isDragging.value = true
     dragStart.value = { x, y }
-    viewDragStart.value = { ...viewState }
+    viewDragStart.value = { scale: viewState.scale, offsetX: viewState.offsetX, offsetY: viewState.offsetY }
   }
 
   // 更新拖拽

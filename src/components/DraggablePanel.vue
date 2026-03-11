@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 
 interface Props {
   position: { x: number; y: number }
@@ -22,6 +22,7 @@ const emit = defineEmits<{
 const isDragging = ref(false)
 const dragOffset = ref({ x: 0, y: 0 })
 const panelRef = ref<HTMLElement | null>(null)
+const panelSize = ref({ width: 340, height: 200 })
 
 // 计算面板样式
 const panelStyle = computed(() => ({
@@ -29,12 +30,39 @@ const panelStyle = computed(() => ({
   top: `${props.position.y}px`
 }))
 
+// 更新面板尺寸
+const updatePanelSize = () => {
+  if (panelRef.value) {
+    const rect = panelRef.value.getBoundingClientRect()
+    panelSize.value = {
+      width: rect.width,
+      height: rect.height
+    }
+  }
+}
+
+// 限制位置在可视区域内
+const clampPosition = (x: number, y: number): { x: number; y: number } => {
+  const minVisibleWidth = 100 // 至少保留 100px 可见
+  const minVisibleHeight = 40 // 标题栏高度
+  
+  const maxX = window.innerWidth - minVisibleWidth
+  const maxY = window.innerHeight - minVisibleHeight
+  
+  return {
+    x: Math.max(-(panelSize.value.width - minVisibleWidth), Math.min(x, maxX)),
+    y: Math.max(0, Math.min(y, maxY))
+  }
+}
+
 // 开始拖拽
 const startDrag = (e: MouseEvent) => {
   // 只有点击标题栏或拖拽把手才拖拽
   const target = e.target as HTMLElement
   if (target.closest('.panel-header') || target.closest('.drag-handle')) {
     isDragging.value = true
+    // 更新面板尺寸以确保边界计算正确
+    updatePanelSize()
     dragOffset.value = {
       x: e.clientX - props.position.x,
       y: e.clientY - props.position.y
@@ -51,14 +79,10 @@ const onDrag = (e: MouseEvent) => {
   const newX = e.clientX - dragOffset.value.x
   const newY = e.clientY - dragOffset.value.y
   
-  // 限制在视口内（允许部分超出）
-  const maxX = window.innerWidth - 50
-  const maxY = window.innerHeight - 30
+  // 限制在视口内
+  const clamped = clampPosition(newX, newY)
   
-  emit('update:position', {
-    x: Math.max(-200, Math.min(newX, maxX)),
-    y: Math.max(-50, Math.min(newY, maxY))
-  })
+  emit('update:position', clamped)
 }
 
 // 结束拖拽

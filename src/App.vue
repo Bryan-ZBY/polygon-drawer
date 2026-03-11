@@ -16,6 +16,7 @@ import { calculateBoundingBox } from '@/utils/geometry'
 import DraggablePanel from '@/components/DraggablePanel.vue'
 import GeometryList from '@/components/GeometryList.vue'
 import RealtimeInput from '@/components/RealtimeInput.vue'
+import GuideOverlay from '@/components/GuideOverlay.vue'
 
 // 状态
 const geometries = ref<Geometry[]>([])
@@ -24,6 +25,8 @@ const selectedEdge = ref<{ polygonId: string; edgeIndex: number; start: Point; e
 const hoveredId = ref<string | null>(null)
 const errorMsg = ref('')
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const showGrid = ref(true) // 是否显示网格
+const guideRef = ref<InstanceType<typeof GuideOverlay> | null>(null) // 新手引导引用
 
 // 撤销/恢复历史记录
 interface HistoryState {
@@ -281,7 +284,7 @@ const drawAll = () => {
   clearCanvas(ctx, canvas.width, canvas.height)
 
   // 绘制网格
-  drawGrid(ctx, canvas.width, canvas.height, viewState.value)
+  drawGrid(ctx, canvas.width, canvas.height, viewState.value, { showGrid: showGrid.value })
 
   // 绘制所有可见图形
   geometries.value.forEach(geometry => {
@@ -1868,7 +1871,17 @@ const generateRandomTestPolygon = () => {
   const newPolygon = generateNonOverlappingPolygon(existingPolygons)
 
   if (newPolygon) {
-    addGeometry(newPolygon)
+    // 直接添加图形，不触发聚焦居中
+    const newGeometry: Geometry = {
+      ...newPolygon,
+      id: generateId(),
+      name: `多边形 ${geometries.value.length + 1}`,
+      color: getNextColor()
+    } as Geometry
+    geometries.value.push(newGeometry)
+    selectedId.value = newGeometry.id
+    saveToHistory()
+    scheduleDraw()
   } else {
     errorMsg.value = '无法生成不重叠的多边形，请尝试重置视图或清空画布'
   }
@@ -1929,12 +1942,116 @@ const cancelRename = () => {
 
 // 重置视图
 const resetView = () => {
-  viewState.value = { scale: 1, offsetX: 0, offsetY: 0 }
+  // 使用动画过渡到默认视图
+  animateViewTransition(1, 0, 0, 400)
+}
+
+// 切换网格显示
+const toggleGrid = () => {
+  showGrid.value = !showGrid.value
   scheduleDraw()
 }
 
+// 动画过渡函数
+const animateViewTransition = (
+  targetScale: number,
+  targetOffsetX: number,
+  targetOffsetY: number,
+  duration: number = 500
+) => {
+  const startScale = viewState.value.scale
+  const startOffsetX = viewState.value.offsetX
+  const startOffsetY = viewState.value.offsetY
+  const startTime = performance.now()
+
+  // 使用 easeInOutCubic 缓动函数
+  const easeInOutCubic = (t: number): number => {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+  }
+
+  const animate = (currentTime: number) => {
+    const elapsed = currentTime - startTime
+    const progress = Math.min(elapsed / duration, 1)
+    const easedProgress = easeInOutCubic(progress)
+
+    viewState.value.scale = startScale + (targetScale - startScale) * easedProgress
+    viewState.value.offsetX = startOffsetX + (targetOffsetX - startOffsetX) * easedProgress
+    viewState.value.offsetY = startOffsetY + (targetOffsetY - startOffsetY) * easedProgress
+
+    scheduleDraw()
+
+    if (progress < 1) {
+      requestAnimationFrame(animate)
+    }
+  }
+
+  requestAnimationFrame(animate)
+}
+
+// 适应全部图形
+const fitViewToAll = () => {
+  if (geometries.value.length === 0) return
+  
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+  
+  for (const geometry of geometries.value) {
+    if (!geometry.visible) continue
+    
+    if (geometry.type === 'polygon') {
+      const polygon = geometry as Polygon
+      for (const point of polygon.points) {
+        minX = Math.min(minX, point.x)
+        maxX = Math.max(maxX, point.x)
+        minY = Math.min(minY, point.y)
+        maxY = Math.max(maxY, point.y)
+      }
+    } else if (geometry.type === 'group') {
+      const group = geometry as PolygonGroup
+      for (const polygon of group.polygons) {
+        if (!polygon.visible) continue
+        for (const point of polygon.points) {
+          minX = Math.min(minX, point.x)
+          maxX = Math.max(maxX, point.x)
+          minY = Math.min(minY, point.y)
+          maxY = Math.max(maxY, point.y)
+        }
+      }
+    }
+  }
+  
+  if (minX === Infinity) return
+  
+  const canvas = canvasRef.value
+  if (!canvas) return
+  
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+  const width = maxX - minX
+  const height = maxY - minY
+  
+  const padding = 0.8
+  const scaleX = (canvas.width * padding) / width
+  const scaleY = (canvas.height * padding) / height
+  const targetScale = Math.max(0.1, Math.min(100, Math.min(scaleX, scaleY)))
+  const targetOffsetX = -centerX * targetScale
+  const targetOffsetY = centerY * targetScale
+  
+  // 使用动画过渡
+  animateViewTransition(targetScale, targetOffsetX, targetOffsetY, 600)
+}
+
+// 适应选中图形
+const fitViewToSelected = () => {
+  if (!selectedId.value) return
+  
+  const geometry = geometries.value.find(g => g.id === selectedId.value)
+  if (!geometry) return
+  
+  fitViewToGeometry(geometry, true) // true 表示使用动画
+}
+
 // 自适应缩放视图以适应新添加的图形
-const fitViewToGeometry = (geometry: Geometry) => {
+const fitViewToGeometry = (geometry: Geometry, animate: boolean = false) => {
   const canvas = canvasRef.value
   if (!canvas) return
 
@@ -1986,16 +2103,19 @@ const fitViewToGeometry = (geometry: Geometry) => {
   scale = Math.max(0.1, Math.min(100, scale))
 
   // 计算偏移量，使图形居中显示在屏幕中间
-  // 根据 worldToScreen 函数：
-  // screenX = canvasWidth/2 + worldX * scale + offsetX
-  // screenY = canvasHeight/2 - worldY * scale + offsetY
-  // 要让图形中心点(centerX, centerY)显示在画布中心：
-  // canvasWidth/2 = canvasWidth/2 + centerX * scale + offsetX  =>  offsetX = -centerX * scale
-  // canvasHeight/2 = canvasHeight/2 - centerY * scale + offsetY  =>  offsetY = centerY * scale
+  const targetOffsetX = -centerX * scale
+  const targetOffsetY = centerY * scale
 
-  viewState.value.scale = scale
-  viewState.value.offsetX = -centerX * scale
-  viewState.value.offsetY = centerY * scale
+  if (animate) {
+    // 使用动画过渡
+    animateViewTransition(scale, targetOffsetX, targetOffsetY, 500)
+  } else {
+    // 直接设置
+    viewState.value.scale = scale
+    viewState.value.offsetX = targetOffsetX
+    viewState.value.offsetY = targetOffsetY
+    scheduleDraw()
+  }
 }
 
 // 清空所有
@@ -2010,6 +2130,42 @@ const clearAll = () => {
     selectedMeasurementId.value = null
     saveToHistory() // 保存历史记录
     scheduleDraw()
+  }
+}
+
+// 切换锁定状态
+const toggleLock = (geometry: Geometry) => {
+  geometry.locked = !geometry.locked
+  scheduleDraw()
+}
+
+// 上移图层
+const moveLayerUp = (id: string) => {
+  const index = geometries.value.findIndex(g => g.id === id)
+  if (index > 0 && index < geometries.value.length) {
+    const prevItem = geometries.value[index - 1]
+    const currentItem = geometries.value[index]
+    if (prevItem && currentItem) {
+      geometries.value[index] = prevItem
+      geometries.value[index - 1] = currentItem
+      saveToHistory()
+      scheduleDraw()
+    }
+  }
+}
+
+// 下移图层
+const moveLayerDown = (id: string) => {
+  const index = geometries.value.findIndex(g => g.id === id)
+  if (index >= 0 && index < geometries.value.length - 1) {
+    const nextItem = geometries.value[index + 1]
+    const currentItem = geometries.value[index]
+    if (nextItem && currentItem) {
+      geometries.value[index] = nextItem
+      geometries.value[index + 1] = currentItem
+      saveToHistory()
+      scheduleDraw()
+    }
   }
 }
 
@@ -2239,6 +2395,9 @@ onUnmounted(() => {
           @toggle-group-collapse="toggleGroupCollapse"
           @start-rename="startRename"
           @delete="deleteGeometry"
+          @toggle-lock="toggleLock"
+          @move-up="moveLayerUp"
+          @move-down="moveLayerDown"
         />
       </template>
     </DraggablePanel>
@@ -2270,6 +2429,63 @@ onUnmounted(() => {
 
     <!-- 右上角信息面板 -->
     <div class="info-panel">
+      <!-- 视图控制按钮 -->
+      <div class="info-item view-controls">
+        <button 
+          class="view-btn" 
+          @click="fitViewToAll"
+          title="适应全部"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+          </svg>
+        </button>
+        <button 
+          class="view-btn" 
+          @click="fitViewToSelected"
+          title="适应选中"
+          :disabled="!selectedId"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          </svg>
+        </button>
+        <button 
+          class="view-btn" 
+          @click="toggleGrid"
+          :class="{ active: showGrid }"
+          title="显示/隐藏网格"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"/>
+            <rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/>
+            <rect x="3" y="14" width="7" height="7"/>
+          </svg>
+        </button>
+        <button 
+          class="view-btn" 
+          @click="resetView"
+          title="重置视图"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+            <path d="M3 3v5h5"/>
+          </svg>
+        </button>
+        <button 
+          class="view-btn" 
+          @click="guideRef?.restartGuide()"
+          title="显示新手引导"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
+      </div>
+      
       <!-- 缩放比例 -->
       <div class="info-item">
         <span class="info-label">缩放</span>
@@ -2380,6 +2596,9 @@ onUnmounted(() => {
         </svg>
       </button>
     </div>
+
+    <!-- 新手引导 -->
+    <GuideOverlay ref="guideRef" />
   </div>
 </template>
 
@@ -2391,6 +2610,7 @@ onUnmounted(() => {
   margin: 0;
   padding: 0;
 }
+
 </style>
 
 <style scoped>
@@ -2744,6 +2964,45 @@ onUnmounted(() => {
 .info-item.measurement-info {
   border-color: rgba(0, 245, 255, 0.5);
   box-shadow: 0 0 30px rgba(0, 245, 255, 0.3);
+}
+
+/* 视图控制按钮 */
+.info-item.view-controls {
+  flex-direction: row;
+  gap: 6px;
+  padding: 8px 10px;
+  border-color: rgba(0, 245, 255, 0.3);
+}
+
+.view-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.view-btn:hover:not(:disabled) {
+  background: rgba(0, 245, 255, 0.15);
+  border-color: rgba(0, 245, 255, 0.4);
+  color: #00f5ff;
+}
+
+.view-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.view-btn.active {
+  background: rgba(0, 245, 255, 0.2);
+  border-color: rgba(0, 245, 255, 0.5);
+  color: #00f5ff;
 }
 
 .info-label.polygon-name {

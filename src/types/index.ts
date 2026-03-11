@@ -21,6 +21,7 @@ export interface BaseGeometry {
   type: GeometryType
   visible: boolean
   color: string
+  locked?: boolean  // 是否锁定（防止误操作）
 }
 
 // 多边形
@@ -69,6 +70,7 @@ export interface PolygonGroup {
   collapsed: boolean
   polygons: Polygon[]
   color: string
+  locked?: boolean  // 是否锁定（防止误操作）
 }
 
 // 联合类型
@@ -118,7 +120,7 @@ export const generateId = () =>
 
 // 获取下一个颜色
 let colorIndex = 0
-export const getNextColor = () => {
+export const getNextColor = (): string => {
   const color = NEON_COLORS[colorIndex % NEON_COLORS.length]
   colorIndex++
   return color

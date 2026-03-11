@@ -39,9 +39,11 @@ export function useHistory(
     if (historyIndex.value > 0) {
       historyIndex.value--
       const state = historyStack.value[historyIndex.value]
-      geometries.value = JSON.parse(JSON.stringify(state.geometries))
-      measurements.value = JSON.parse(JSON.stringify(state.measurements))
-      onRestore()
+      if (state) {
+        geometries.value = JSON.parse(JSON.stringify(state.geometries))
+        measurements.value = JSON.parse(JSON.stringify(state.measurements))
+        onRestore()
+      }
     }
   }
 
@@ -49,9 +51,11 @@ export function useHistory(
     if (historyIndex.value < historyStack.value.length - 1) {
       historyIndex.value++
       const state = historyStack.value[historyIndex.value]
-      geometries.value = JSON.parse(JSON.stringify(state.geometries))
-      measurements.value = JSON.parse(JSON.stringify(state.measurements))
-      onRestore()
+      if (state) {
+        geometries.value = JSON.parse(JSON.stringify(state.geometries))
+        measurements.value = JSON.parse(JSON.stringify(state.measurements))
+        onRestore()
+      }
     }
   }
 
