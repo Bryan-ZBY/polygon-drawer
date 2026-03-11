@@ -38,6 +38,11 @@ const parsePolygon = (input: string): ParseResult<Polygon> => {
       return { success: false, error: '' }
     }
     
+    // 检查是否是边数据格式（包含 P1, P2 属性）
+    if (data[0] && data[0].P1 && data[0].P2) {
+      return parseEdgesFormat(data)
+    }
+    
     const points = data.filter(p => 
       typeof p.x === 'number' && typeof p.y === 'number'
     )
@@ -63,6 +68,97 @@ const parsePolygon = (input: string): ParseResult<Polygon> => {
     }
   } catch (e) {
     return { success: false, error: 'JSON 格式错误' }
+  }
+}
+
+// 解析边数据格式
+const parseEdgesFormat = (edges: any[]): ParseResult<Polygon> => {
+  try {
+    const points: { x: number; y: number }[] = []
+    
+    // 构建点集，假设边是连续的
+    for (let i = 0; i < edges.length; i++) {
+      const edge = edges[i]
+      
+      // 验证边数据格式
+      if (!edge.P1 || !edge.P2) {
+        return { success: false, error: '边数据必须包含 P1 和 P2' }
+      }
+      
+      if (typeof edge.P1.X !== 'number' || typeof edge.P1.Y !== 'number' ||
+          typeof edge.P2.X !== 'number' || typeof edge.P2.Y !== 'number') {
+        return { success: false, error: '边的坐标必须是数字' }
+      }
+      
+      // 添加起点（第一条边）或检查连续性
+      if (i === 0) {
+        points.push({ x: edge.P1.X, y: edge.P1.Y })
+      }
+      
+      // 添加终点
+      points.push({ x: edge.P2.X, y: edge.P2.Y })
+    }
+    
+    // 检查是否形成闭合多边形
+    if (points.length < 3) {
+      return { success: false, error: '至少需要3个点才能绘制多边形' }
+    }
+    
+    // 检查首尾是否相连，如果不相连则添加闭合点
+    const firstPoint = points[0]
+    const lastPoint = points[points.length - 1]
+    const isClosed = Math.abs(firstPoint.x - lastPoint.x) < 0.0001 && 
+                     Math.abs(firstPoint.y - lastPoint.y) < 0.0001
+    
+    if (!isClosed) {
+      // 如果边数据没有形成闭合，我们仍然使用这些点绘制
+      // 但会移除最后一个重复的点
+      if (points.length > 1) {
+        // 检查是否有重复的点
+        const uniquePoints: { x: number; y: number }[] = []
+        for (const point of points) {
+          const isDuplicate = uniquePoints.some(p => 
+            Math.abs(p.x - point.x) < 0.0001 && Math.abs(p.y - point.y) < 0.0001
+          )
+          if (!isDuplicate) {
+            uniquePoints.push(point)
+          }
+        }
+        
+        if (uniquePoints.length >= 3) {
+          return {
+            success: true,
+            data: {
+              id: '',
+              name: '',
+              type: GeometryType.POLYGON,
+              points: uniquePoints,
+              visible: true,
+              color: ''
+            }
+          }
+        }
+      }
+    }
+    
+    // 移除最后一个点（因为它是重复的起点）
+    if (isClosed && points.length > 1) {
+      points.pop()
+    }
+    
+    return {
+      success: true,
+      data: {
+        id: '',
+        name: '',
+        type: GeometryType.POLYGON,
+        points,
+        visible: true,
+        color: ''
+      }
+    }
+  } catch (e) {
+    return { success: false, error: '边数据解析错误' }
   }
 }
 
@@ -118,7 +214,7 @@ watch(inputText, () => {
     <div class="input-row">
       <input
         v-model="inputText"
-        placeholder='粘贴点集...'
+        placeholder='粘贴点集或边数据...'
         class="glass-input"
         :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode }"
       />

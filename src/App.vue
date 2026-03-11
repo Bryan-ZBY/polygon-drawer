@@ -125,17 +125,17 @@ const calculateDistance = (a: Point, b: Point): number => {
 const animationFrameId = ref<number | null>(null)
 const needsRedraw = ref(false)
 
-// 计算鼠标在世界坐标系中的位置
+// 计算鼠标在世界坐标系中的位置（Y轴向上为正）
 const mouseWorldPos = computed(() => {
   const canvas = canvasRef.value
   if (!canvas) return { x: 0, y: 0 }
-  
+
   const centerX = canvas.width / 2
   const centerY = canvas.height / 2
-  
+
   return {
     x: (mousePos.value.x - centerX - viewState.value.offsetX) / viewState.value.scale,
-    y: (mousePos.value.y - centerY - viewState.value.offsetY) / viewState.value.scale
+    y: -(mousePos.value.y - centerY - viewState.value.offsetY) / viewState.value.scale  // Y轴取反，向上为正
   }
 })
 
@@ -225,7 +225,7 @@ const savePanelPositions = () => {
 watch(inputPanelPos, savePanelPositions, { deep: true })
 watch(listPanelPos, savePanelPositions, { deep: true })
 
-// 世界坐标转屏幕坐标
+// 世界坐标转屏幕坐标（Y轴向上为正）
 const worldToScreen = (point: Point): { x: number; y: number } => {
   const canvas = canvasRef.value
   if (!canvas) return { x: 0, y: 0 }
@@ -235,7 +235,7 @@ const worldToScreen = (point: Point): { x: number; y: number } => {
   
   return {
     x: centerX + (point.x * viewState.value.scale) + viewState.value.offsetX,
-    y: centerY + (point.y * viewState.value.scale) + viewState.value.offsetY
+    y: centerY - (point.y * viewState.value.scale) + viewState.value.offsetY  // Y轴取反，向上为正
   }
 }
 
@@ -1185,12 +1185,12 @@ const handleMouseMove = (e: MouseEvent) => {
     y: e.clientY - rect.top
   }
 
-  // 计算世界坐标
+  // 计算世界坐标（Y轴向上为正）
   const centerX = canvas.width / 2
   const centerY = canvas.height / 2
   const worldPos = {
     x: (newMousePos.x - centerX - viewState.value.offsetX) / viewState.value.scale,
-    y: (newMousePos.y - centerY - viewState.value.offsetY) / viewState.value.scale
+    y: -(newMousePos.y - centerY - viewState.value.offsetY) / viewState.value.scale  // Y轴取反，向上为正
   }
 
   // 检测吸附
@@ -1352,7 +1352,7 @@ const handleMouseDown = (e: MouseEvent) => {
   const centerY = canvas.height / 2
   const worldPos = {
     x: (clickX - centerX - viewState.value.offsetX) / viewState.value.scale,
-    y: (clickY - centerY - viewState.value.offsetY) / viewState.value.scale
+    y: -(clickY - centerY - viewState.value.offsetY) / viewState.value.scale  // Y轴取反，向上为正
   }
 
   if (e.button === 0) {
@@ -1553,7 +1553,7 @@ const handleMouseUp = (e: MouseEvent) => {
           const centerY = canvas.height / 2
           const worldPos = {
             x: (clickX - centerX - viewState.value.offsetX) / viewState.value.scale,
-            y: (clickY - centerY - viewState.value.offsetY) / viewState.value.scale
+            y: -(clickY - centerY - viewState.value.offsetY) / viewState.value.scale  // Y轴取反，向上为正
           }
 
           const snap = detectSnap(worldPos)

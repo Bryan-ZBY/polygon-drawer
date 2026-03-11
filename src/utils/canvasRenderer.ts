@@ -37,7 +37,7 @@ export const calculateBoundingBox = (points: Point[]): BoundingBox => {
   }
 }
 
-// 统一的坐标变换 - 将世界坐标转换为屏幕坐标
+// 统一的坐标变换 - 将世界坐标转换为屏幕坐标（Y轴向上为正）
 export const worldToScreen = (
   point: Point,
   viewState: ViewState,
@@ -46,14 +46,14 @@ export const worldToScreen = (
 ): { x: number; y: number } => {
   const centerX = canvasWidth / 2
   const centerY = canvasHeight / 2
-  
+
   return {
     x: centerX + (point.x * viewState.scale) + viewState.offsetX,
-    y: centerY + (point.y * viewState.scale) + viewState.offsetY
+    y: centerY - (point.y * viewState.scale) + viewState.offsetY  // Y轴取反，向上为正
   }
 }
 
-// 屏幕坐标转世界坐标
+// 屏幕坐标转世界坐标（Y轴向上为正）
 export const screenToWorld = (
   screenX: number,
   screenY: number,
@@ -63,10 +63,10 @@ export const screenToWorld = (
 ): Point => {
   const centerX = canvasWidth / 2
   const centerY = canvasHeight / 2
-  
+
   return {
     x: (screenX - centerX - viewState.offsetX) / viewState.scale,
-    y: (screenY - centerY - viewState.offsetY) / viewState.scale
+    y: -(screenY - centerY - viewState.offsetY) / viewState.scale  // Y轴取反，向上为正
   }
 }
 
