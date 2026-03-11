@@ -156,86 +156,83 @@ watch(inputText, () => {
 
 .glass-input {
   flex: 1;
-  padding: 10px 12px;
+  padding: 6px 10px;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
+  border-radius: 4px;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 12px;
   color: #00f5ff;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
 }
 
 .glass-input::placeholder {
-  color: rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.3);
 }
 
 .glass-input:focus {
   outline: none;
-  border-color: rgba(0, 245, 255, 0.5);
+  border-color: rgba(0, 245, 255, 0.4);
   background: rgba(0, 0, 0, 0.4);
-  box-shadow: 0 0 0 3px rgba(0, 245, 255, 0.1);
 }
 
 .glass-input.valid {
-  border-color: rgba(0, 255, 136, 0.5);
+  border-color: rgba(0, 255, 136, 0.4);
 }
 
 .glass-input.invalid {
-  border-color: rgba(255, 107, 107, 0.5);
+  border-color: rgba(255, 107, 107, 0.4);
 }
 
 .glass-input.mode-3d {
-  border-color: rgba(255, 0, 255, 0.5);
+  border-color: rgba(255, 0, 255, 0.4);
 }
 
 .error-msg {
-  margin: 6px 0 0 0;
-  font-size: 11px;
+  margin: 4px 0 0 0;
+  font-size: 10px;
   color: #ff6b6b;
 }
 
 .action-btns {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .btn-test {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px;
+  padding: 6px;
   background: rgba(0, 255, 136, 0.1);
-  border: 1px solid rgba(0, 255, 136, 0.3);
-  border-radius: 6px;
+  border: 1px solid rgba(0, 255, 136, 0.2);
+  border-radius: 4px;
   color: #00ff88;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
 }
 
 .btn-test:hover {
-  background: rgba(0, 255, 136, 0.2);
-  border-color: rgba(0, 255, 136, 0.5);
-  box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
+  background: rgba(0, 255, 136, 0.15);
+  border-color: rgba(0, 255, 136, 0.4);
 }
 
 .btn-print {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px;
+  padding: 6px;
   background: rgba(0, 245, 255, 0.1);
-  border: 1px solid rgba(0, 245, 255, 0.3);
-  border-radius: 6px;
+  border: 1px solid rgba(0, 245, 255, 0.2);
+  border-radius: 4px;
   color: #00f5ff;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
 }
 
 .btn-print:hover {
-  background: rgba(0, 245, 255, 0.2);
-  border-color: rgba(0, 245, 255, 0.5);
-  box-shadow: 0 0 10px rgba(0, 245, 255, 0.3);
+  background: rgba(0, 245, 255, 0.15);
+  border-color: rgba(0, 245, 255, 0.4);
 }
 </style>

@@ -138,15 +138,14 @@ onUnmounted(() => {
 }
 
 .draggable-panel.collapsed {
-  width: auto !important;
-  min-width: 200px;
+  /* 折叠时保持宽度不变 */
 }
 
 .panel-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
+  padding: 10px 14px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   cursor: grab;
   transition: background 0.2s ease;
@@ -182,12 +181,9 @@ onUnmounted(() => {
 }
 
 .panel-title {
-  font-size: 16px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #fff 0%, #a0a0b0 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .panel-badge {
@@ -220,7 +216,7 @@ onUnmounted(() => {
 }
 
 .panel-content {
-  padding: 20px;
+  padding: 12px;
   max-height: calc(100vh - 150px);
   overflow-y: auto;
 }
