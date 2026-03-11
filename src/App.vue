@@ -6,7 +6,10 @@ import {
   clearCanvas, 
   drawGrid, 
   drawGeometry,
-  detectHover
+  detectHover,
+  calculatePolygonArea,
+  calculatePolygonPerimeter,
+  isPointInPolygon
 } from '@/utils/canvasRenderer'
 import { generateNonOverlappingPolygon } from '@/utils/geometryGenerator'
 import DraggablePanel from '@/components/DraggablePanel.vue'
@@ -32,7 +35,10 @@ const isMeasuring = ref(false)
 const measureStart = ref<Point | null>(null)
 const measureEnd = ref<Point | null>(null)
 const snappedPoint = ref<Point | null>(null)
-const snapType = ref<'none' | 'vertex' | 'edge' | 'axis' | 'edge-axis'>('none')
+const snapType = ref<'none' | 'vertex' | 'edge' | 'axis' | 'edge-axis' | 'measure-perp' | 'perpendicular-hint'>('none')
+const isPerpendicularSnap = ref(false) // 是否是垂直吸附
+const perpendicularTarget = ref<'measurement' | 'polygon' | null>(null) // 垂直吸附目标类型
+const snappedMeasurementId = ref<string | null>(null) // 吸附到的测距线ID
 const isMeasurePending = ref(false)  // 松开Ctrl后等待左键确认的测距状态
 
 // 已完成的测距线列表
@@ -68,6 +74,16 @@ const mouseWorldPos = computed(() => {
   }
 })
 
+// 计算选中的多边形
+const selectedPolygon = computed(() => {
+  if (!selectedId.value) return null
+  const geometry = geometries.value.find(g => g.id === selectedId.value)
+  if (geometry && geometry.type === 'polygon') {
+    return geometry as Polygon
+  }
+  return null
+})
+
 // 视图状态
 const viewState = ref<ViewState>({
   scale: 1,
@@ -80,6 +96,7 @@ const isDragging = ref(false)
 const isRightDragging = ref(false)  // 右键拖动状态
 const isMeasureDragging = ref(false)  // 测距时左键拖动状态
 const canMeasureDrag = ref(false)  // 是否可以拖动（需要重新按下左键）
+const ignoreNextClick = ref(false)  // 双击后忽略下一次单击
 const lastMousePos = ref({ x: 0, y: 0 })
 const measureDragStartPos = ref({ x: 0, y: 0 })  // 测距时左键按下的位置
 const lastClickTime = ref(0)  // 上次左键点击时间，用于检测双击
@@ -224,6 +241,89 @@ const drawAll = () => {
       ctx.strokeStyle = isEdgeAxis ? '#00ff88' : '#ff6b6b'
       ctx.lineWidth = 2
       ctx.stroke()
+    } else if (snapType.value === 'measure-perp' && snappedMeasurementId.value) {
+      // 测距线吸附：绘制垂直线
+      const measurement = measurements.value.find(m => m.id === snappedMeasurementId.value)
+      if (measurement) {
+        const measureStart = worldToScreen(measurement.start)
+        const measureEnd = worldToScreen(measurement.end)
+        
+        // 计算测距线方向
+        const dx = measureEnd.x - measureStart.x
+        const dy = measureEnd.y - measureStart.y
+        const len = Math.sqrt(dx * dx + dy * dy)
+        
+        if (len > 0) {
+          // 垂直方向（归一化）
+          const perpX = -dy / len
+          const perpY = dx / len
+          
+          // 绘制垂直吸附线（从吸附点向两侧延伸）
+          ctx.strokeStyle = '#00f5ff'
+          ctx.lineWidth = 1
+          ctx.setLineDash([3, 3])
+          
+          ctx.beginPath()
+          ctx.moveTo(screenPos.x - perpX * 1000, screenPos.y - perpY * 1000)
+          ctx.lineTo(screenPos.x + perpX * 1000, screenPos.y + perpY * 1000)
+          ctx.stroke()
+          
+          ctx.setLineDash([])
+        }
+      }
+      
+      // 绘制吸附点（青色）
+      ctx.beginPath()
+      ctx.arc(screenPos.x, screenPos.y, 8, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(0, 245, 255, 0.5)'
+      ctx.fill()
+      ctx.strokeStyle = '#00f5ff'
+      ctx.lineWidth = 2
+      ctx.stroke()
+    } else if (snapType.value === 'perpendicular-hint') {
+      // 垂直吸附提示：绘制高亮效果
+      const targetName = '垂线'
+      
+      // 绘制垂直符号（直角标记）
+      ctx.strokeStyle = '#ff6b6b'
+      ctx.lineWidth = 2
+      ctx.setLineDash([])
+      
+      // 绘制直角符号
+      const symbolSize = 12
+      ctx.beginPath()
+      ctx.moveTo(screenPos.x - symbolSize, screenPos.y)
+      ctx.lineTo(screenPos.x - symbolSize, screenPos.y - symbolSize)
+      ctx.lineTo(screenPos.x, screenPos.y - symbolSize)
+      ctx.stroke()
+      
+      // 绘制吸附点（红色高亮）
+      ctx.beginPath()
+      ctx.arc(screenPos.x, screenPos.y, 10, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(255, 107, 107, 0.3)'
+      ctx.fill()
+      ctx.strokeStyle = '#ff6b6b'
+      ctx.lineWidth = 3
+      ctx.stroke()
+      
+      // 绘制提示文字背景
+      const text = `⊥ ${targetName}`
+      ctx.font = 'bold 12px sans-serif'
+      const textMetrics = ctx.measureText(text)
+      const textWidth = textMetrics.width
+      const textHeight = 14
+      const padding = 4
+      
+      ctx.fillStyle = 'rgba(255, 107, 107, 0.9)'
+      ctx.beginPath()
+      ctx.roundRect(screenPos.x + 15, screenPos.y - textHeight / 2 - padding, textWidth + padding * 2, textHeight + padding * 2, 4)
+      ctx.fill()
+      
+      // 绘制提示文字
+      ctx.fillStyle = '#ffffff'
+      ctx.textAlign = 'left'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(text, screenPos.x + 15 + padding, screenPos.y)
     } else {
       // 顶点或边吸附
       ctx.beginPath()
@@ -275,9 +375,23 @@ const drawAll = () => {
     ctx.lineWidth = 2
     ctx.stroke()
 
-    // 绘制距离标签背景
+    // 计算标签位置（稍微偏移避免遮挡线条）
     const midX = (start.x + end.x) / 2
     const midY = (start.y + end.y) / 2
+    const dx = end.x - start.x
+    const dy = end.y - start.y
+    const len = Math.sqrt(dx * dx + dy * dy)
+
+    // 垂直于线条的偏移方向
+    let offsetX = 0
+    let offsetY = -25
+    if (len > 0) {
+      offsetX = -(dy / len) * 25
+      offsetY = (dx / len) * 25
+    }
+
+    const labelX = midX + offsetX
+    const labelY = midY + offsetY
     const distance = calculateDistance(measureStart.value, measureEnd.value)
     const label = distance.toFixed(2)
     ctx.font = 'bold 14px "JetBrains Mono", monospace'
@@ -287,7 +401,7 @@ const drawAll = () => {
     ctx.strokeStyle = labelBorderColor
     ctx.lineWidth = 1
     ctx.beginPath()
-    ctx.roundRect(midX - textWidth / 2 - 8, midY - 12, textWidth + 16, 24, 4)
+    ctx.roundRect(labelX - textWidth / 2 - 8, labelY - 12, textWidth + 16, 24, 4)
     ctx.fill()
     ctx.stroke()
 
@@ -295,7 +409,7 @@ const drawAll = () => {
     ctx.fillStyle = labelTextColor
     ctx.textAlign = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText(label, midX, midY)
+    ctx.fillText(label, labelX, labelY)
 
     // 待确认状态下显示提示文字
     if (isMeasurePending.value) {
@@ -304,12 +418,12 @@ const drawAll = () => {
       const hintWidth = ctx.measureText(hintText).width
       ctx.fillStyle = 'rgba(0, 0, 0, 0.6)'
       ctx.beginPath()
-      ctx.roundRect(midX - hintWidth / 2 - 6, midY + 16, hintWidth + 12, 18, 4)
+      ctx.roundRect(labelX - hintWidth / 2 - 6, labelY + 16, hintWidth + 12, 18, 4)
       ctx.fill()
       ctx.fillStyle = '#ffff00'
       ctx.textAlign = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(hintText, midX, midY + 25)
+      ctx.fillText(hintText, labelX, labelY + 25)
     }
   }
 
@@ -514,16 +628,39 @@ const pointToSegmentDistance = (p: Point, a: Point, b: Point): { distance: numbe
   return { distance: Math.sqrt(dx * dx + dy * dy), closestPoint }
 }
 
-// 检测是否点击了测距线
-const detectMeasurementClick = (worldPos: Point): { id: string } | null => {
+// 检测是否点击了测距线，返回测距线信息和线上最近点
+const detectMeasurementClick = (worldPos: Point): { id: string; measurement: { id: string; start: Point; end: Point; distance: number }; closestPointOnLine: Point } | null => {
   const CLICK_THRESHOLD = 10 / viewState.value.scale // 10像素的点击阈值，转换为世界坐标
 
   for (let i = measurements.value.length - 1; i >= 0; i--) {
     const measurement = measurements.value[i]
-    const { distance } = pointToSegmentDistance(worldPos, measurement.start, measurement.end)
+    const { distance, closestPoint } = pointToSegmentDistance(worldPos, measurement.start, measurement.end)
 
     if (distance < CLICK_THRESHOLD) {
-      return { id: measurement.id }
+      // closestPoint 就是测距线上离双击位置最近的点
+      return { 
+        id: measurement.id, 
+        measurement: { ...measurement },
+        closestPointOnLine: closestPoint
+      }
+    }
+  }
+  return null
+}
+
+// 检测是否点击了多边形（用于选中）
+const detectPolygonClick = (worldPos: Point): Polygon | null => {
+  // 倒序遍历，优先检测上层图形
+  for (let i = geometries.value.length - 1; i >= 0; i--) {
+    const geometry = geometries.value[i]
+    if (!geometry.visible) continue
+    
+    if (geometry.type === 'polygon') {
+      const polygon = geometry as Polygon
+      // 使用射线法检测点是否在多边形内
+      if (isPointInPolygon(worldPos, polygon.points)) {
+        return polygon
+      }
     }
   }
   return null
@@ -570,11 +707,71 @@ const detectMeasurementHover = (worldPos: Point): { id: string } | null => {
   return null
 }
 
+// 计算两条线段的夹角（弧度）
+const getAngleBetweenSegments = (a1: Point, a2: Point, b1: Point, b2: Point): number => {
+  const dx1 = a2.x - a1.x
+  const dy1 = a2.y - a1.y
+  const dx2 = b2.x - b1.x
+  const dy2 = b2.y - b1.y
+  
+  const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1)
+  const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2)
+  
+  if (len1 === 0 || len2 === 0) return 0
+  
+  // 计算夹角
+  const cosAngle = (dx1 * dx2 + dy1 * dy2) / (len1 * len2)
+  return Math.acos(Math.max(-1, Math.min(1, cosAngle)))
+}
+
+// 计算两条线段的交点（如果它们相交）
+const getLineIntersection = (a1: Point, a2: Point, b1: Point, b2: Point): Point | null => {
+  const x1 = a1.x, y1 = a1.y
+  const x2 = a2.x, y2 = a2.y
+  const x3 = b1.x, y3 = b1.y
+  const x4 = b2.x, y4 = b2.y
+  
+  const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+  
+  if (Math.abs(denom) < 1e-10) return null // 平行线
+  
+  const t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / denom
+  
+  return {
+    x: x1 + t * (x2 - x1),
+    y: y1 + t * (y2 - y1)
+  }
+}
+
+// 计算点到直线的垂足
+const getPerpendicularFoot = (p: Point, a: Point, b: Point): Point => {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  
+  if (dx === 0 && dy === 0) return a
+  
+  const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)
+  
+  return {
+    x: a.x + t * dx,
+    y: a.y + t * dy
+  }
+}
+
 // 吸附检测
-const detectSnap = (worldPos: Point): { point: Point; type: 'vertex' | 'edge' | 'axis' | 'edge-axis' | 'none' } => {
+const detectSnap = (worldPos: Point): { 
+  point: Point; 
+  type: 'vertex' | 'edge' | 'axis' | 'edge-axis' | 'measure-perp' | 'perpendicular-hint' | 'none'; 
+  measurementId?: string;
+  isPerpendicular?: boolean;
+  perpendicularTo?: 'measurement' | 'polygon';
+} => {
   let minDist = Infinity
   let snapPoint = worldPos
-  let snapType: 'vertex' | 'edge' | 'axis' | 'edge-axis' | 'none' = 'none'
+  let snapType: 'vertex' | 'edge' | 'axis' | 'edge-axis' | 'measure-perp' | 'perpendicular-hint' | 'none' = 'none'
+  let snapMeasurementId: string | undefined = undefined
+  let isPerpendicular = false
+  let perpendicularTo: 'measurement' | 'polygon' | undefined = undefined
 
   // 检测顶点吸附
   for (const geometry of geometries.value) {
@@ -599,6 +796,7 @@ const detectSnap = (worldPos: Point): { point: Point; type: 'vertex' | 'edge' | 
   // 检测边吸附（顶点吸附优先）
   let edgeSnapPoint: Point | null = null
   let edgeMinDist = Infinity
+  let bestEdge: { a: Point; b: Point } | null = null
   if (snapType === 'none') {
     for (const geometry of geometries.value) {
       if (!geometry.visible || geometry.type !== 'polygon') continue
@@ -614,6 +812,7 @@ const detectSnap = (worldPos: Point): { point: Point; type: 'vertex' | 'edge' | 
         if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < edgeMinDist) {
           edgeMinDist = screenDist
           edgeSnapPoint = closestPoint
+          bestEdge = { a, b }
         }
       }
     }
@@ -624,47 +823,155 @@ const detectSnap = (worldPos: Point): { point: Point; type: 'vertex' | 'edge' | 
     }
   }
 
-  // 测距时检测水平/垂直轴吸附
+  // 测距时检测与已有测距线或多边形边的垂直吸附（优先级最高）
+  // 逻辑：从测距起点向目标线段作垂线，如果垂足在线段上且鼠标距离垂足较近，则吸附到垂足
   if (isMeasuring.value && measureStart.value) {
-    const AXIS_SNAP_THRESHOLD = 10 / viewState.value.scale // 10像素的轴吸附阈值
+    const PERP_SNAP_DISTANCE = 15 / viewState.value.scale // 15像素的垂直吸附距离
     const start = measureStart.value
+    const currentEnd = worldPos
+    
+    let bestPerpSnap: { point: Point; distance: number; target: 'measurement' | 'polygon'; id?: string } | null = null
 
-    // 检测水平轴吸附（Y坐标相同）
-    const yDist = Math.abs(worldPos.y - start.y)
-    if (yDist < AXIS_SNAP_THRESHOLD) {
-      const axisSnapPoint = { x: worldPos.x, y: start.y }
-      const yScreenDist = yDist * viewState.value.scale
-
-      if (snapType === 'edge' && edgeSnapPoint) {
-        // 边吸附和水平轴吸附同时满足：将边吸附点投影到水平轴上
-        snapPoint = { x: edgeSnapPoint.x, y: start.y }
-        snapType = 'edge-axis'
-      } else if (yScreenDist < minDist) {
-        minDist = yScreenDist
-        snapPoint = axisSnapPoint
-        snapType = 'axis'
+    // 检测与已有测距线的垂直关系
+    for (const measurement of measurements.value) {
+      // 计算从测距起点到目标线段的垂足
+      const foot = getPerpendicularFoot(start, measurement.start, measurement.end)
+      
+      // 检查垂足是否在线段上
+      const { distance: distFromSegment, closestPoint } = pointToSegmentDistance(foot, measurement.start, measurement.end)
+      const isFootOnSegment = distFromSegment < 0.001 // 垂足在线段上（误差小于0.001）
+      
+      if (isFootOnSegment) {
+        // 计算鼠标位置到垂足的距离
+        const distToFoot = Math.sqrt(
+          Math.pow(foot.x - currentEnd.x, 2) + 
+          Math.pow(foot.y - currentEnd.y, 2)
+        )
+        
+        // 如果鼠标距离垂足较近，则吸附到垂足
+        if (distToFoot < PERP_SNAP_DISTANCE) {
+          if (!bestPerpSnap || distToFoot < bestPerpSnap.distance) {
+            bestPerpSnap = { point: foot, distance: distToFoot, target: 'measurement', id: measurement.id }
+          }
+        }
       }
     }
 
-    // 检测垂直轴吸附（X坐标相同）
-    const xDist = Math.abs(worldPos.x - start.x)
-    if (xDist < AXIS_SNAP_THRESHOLD) {
-      const axisSnapPoint = { x: start.x, y: worldPos.y }
-      const xScreenDist = xDist * viewState.value.scale
+    // 检测与多边形边的垂直关系
+    for (const geometry of geometries.value) {
+      if (!geometry.visible || geometry.type !== 'polygon') continue
+      
+      const polygon = geometry as Polygon
+      const points = polygon.points
+      for (let i = 0; i < points.length; i++) {
+        const a = points[i]
+        const b = points[(i + 1) % points.length]
+        
+        // 计算从测距起点到边的垂足
+        const foot = getPerpendicularFoot(start, a, b)
+        
+        // 检查垂足是否在边线段上
+        const { distance: distFromSegment } = pointToSegmentDistance(foot, a, b)
+        const isFootOnSegment = distFromSegment < 0.001
+        
+        if (isFootOnSegment) {
+          // 计算鼠标位置到垂足的距离
+          const distToFoot = Math.sqrt(
+            Math.pow(foot.x - currentEnd.x, 2) + 
+            Math.pow(foot.y - currentEnd.y, 2)
+          )
+          
+          if (distToFoot < PERP_SNAP_DISTANCE) {
+            if (!bestPerpSnap || distToFoot < bestPerpSnap.distance) {
+              bestPerpSnap = { point: foot, distance: distToFoot, target: 'polygon' }
+            }
+          }
+        }
+      }
+    }
 
-      if (snapType === 'edge' && edgeSnapPoint) {
-        // 边吸附和垂直轴吸附同时满足：将边吸附点投影到垂直轴上
-        snapPoint = { x: start.x, y: edgeSnapPoint.y }
-        snapType = 'edge-axis'
-      } else if (xScreenDist < minDist) {
-        minDist = xScreenDist
-        snapPoint = axisSnapPoint
-        snapType = 'axis'
+    // 如果找到垂直吸附点，优先使用（覆盖其他所有吸附类型）
+    if (bestPerpSnap) {
+      snapPoint = bestPerpSnap.point
+      snapType = 'perpendicular-hint'
+      isPerpendicular = true
+      perpendicularTo = bestPerpSnap.target
+      if (bestPerpSnap.target === 'measurement' && bestPerpSnap.id) {
+        snapMeasurementId = bestPerpSnap.id
+      }
+      minDist = bestPerpSnap.distance * viewState.value.scale
+      // 垂直吸附优先级最高，直接返回结果
+      return { 
+        point: snapPoint, 
+        type: snapType, 
+        measurementId: snapMeasurementId,
+        isPerpendicular,
+        perpendicularTo
+      }
+    }
+
+    // 检测水平/垂直轴吸附（在没有垂直吸附时）
+    if (snapType !== 'perpendicular-hint') {
+      const AXIS_SNAP_THRESHOLD = 10 / viewState.value.scale
+      
+      // 检测水平轴吸附
+      const yDist = Math.abs(worldPos.y - start.y)
+      if (yDist < AXIS_SNAP_THRESHOLD) {
+        const axisSnapPoint = { x: worldPos.x, y: start.y }
+        const yScreenDist = yDist * viewState.value.scale
+
+        if (snapType === 'edge' && edgeSnapPoint) {
+          snapPoint = { x: edgeSnapPoint.x, y: start.y }
+          snapType = 'edge-axis'
+        } else if (yScreenDist < minDist) {
+          minDist = yScreenDist
+          snapPoint = axisSnapPoint
+          snapType = 'axis'
+        }
+      }
+
+      // 检测垂直轴吸附
+      const xDist = Math.abs(worldPos.x - start.x)
+      if (xDist < AXIS_SNAP_THRESHOLD) {
+        const axisSnapPoint = { x: start.x, y: worldPos.y }
+        const xScreenDist = xDist * viewState.value.scale
+
+        if (snapType === 'edge' && edgeSnapPoint) {
+          snapPoint = { x: start.x, y: edgeSnapPoint.y }
+          snapType = 'edge-axis'
+        } else if (xScreenDist < minDist) {
+          minDist = xScreenDist
+          snapPoint = axisSnapPoint
+          snapType = 'axis'
+        }
       }
     }
   }
 
-  return { point: snapPoint, type: snapType }
+  // 检测已有测距线段的吸附（在设置测距起点或终点时都可以吸附）
+  // 注意：这个检测放在垂直吸附之后，但不需要 isMeasuring.value 条件
+  if (snapType !== 'perpendicular-hint' && snapType !== 'vertex') {
+    const MEASURE_SNAP_THRESHOLD = 10 / viewState.value.scale
+    for (const measurement of measurements.value) {
+      const { distance, closestPoint } = pointToSegmentDistance(worldPos, measurement.start, measurement.end)
+      const screenDist = distance * viewState.value.scale
+
+      if (screenDist < MEASURE_SNAP_THRESHOLD && screenDist < minDist) {
+        minDist = screenDist
+        snapPoint = closestPoint
+        snapType = 'measure-perp'
+        snapMeasurementId = measurement.id
+      }
+    }
+  }
+
+  return { 
+    point: snapPoint, 
+    type: snapType, 
+    measurementId: snapMeasurementId,
+    isPerpendicular,
+    perpendicularTo
+  }
 }
 
 // 处理鼠标移动 - 优化版本，减少不必要的重绘
@@ -689,9 +996,19 @@ const handleMouseMove = (e: MouseEvent) => {
 
   // 检测吸附
   const snap = detectSnap(worldPos)
-  const snapChanged = (snappedPoint.value?.x !== snap.point.x || snappedPoint.value?.y !== snap.point.y || snapType.value !== snap.type)
+  const snapChanged = (
+    snappedPoint.value?.x !== snap.point.x || 
+    snappedPoint.value?.y !== snap.point.y || 
+    snapType.value !== snap.type || 
+    snappedMeasurementId.value !== snap.measurementId ||
+    isPerpendicularSnap.value !== (snap.isPerpendicular || false) ||
+    perpendicularTarget.value !== (snap.perpendicularTo || null)
+  )
   snappedPoint.value = snap.type !== 'none' ? snap.point : null
   snapType.value = snap.type
+  snappedMeasurementId.value = snap.measurementId || null
+  isPerpendicularSnap.value = snap.isPerpendicular || false
+  perpendicularTarget.value = snap.perpendicularTo || null
 
   // 更新测距终点
   let measureChanged = false
@@ -754,12 +1071,12 @@ const handleMouseMove = (e: MouseEvent) => {
     lastMousePos.value = { x: e.clientX, y: e.clientY }
   }
 
-  // 处理测距时的左键拖动（移动超过5像素视为拖动）
+  // 处理测距时的左键拖动（移动超过10像素视为拖动）
   if (isMeasuring.value && canMeasureDrag.value && e.buttons === 1) {
     if (!isMeasureDragging.value) {
       const deltaX = e.clientX - measureDragStartPos.value.x
       const deltaY = e.clientY - measureDragStartPos.value.y
-      if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+      if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
         isMeasureDragging.value = true
       }
     }
@@ -855,22 +1172,51 @@ const handleMouseDown = (e: MouseEvent) => {
       }
     }
 
+    // 检测双击
+    const now = Date.now()
+    const isDoubleClick = now - lastClickTime.value < DOUBLE_CLICK_DELAY
+    lastClickTime.value = now
+
     // 检测是否点击了已有的测距线
     const clickedMeasurement = detectMeasurementClick(worldPos)
+
+    // 双击或Ctrl+左键点击测距线：以测距线上点击位置对应的最近点为起点开始新测距
+    if ((isDoubleClick || e.ctrlKey) && clickedMeasurement && !isMeasuring.value) {
+      ignoreNextClick.value = true
+      selectedMeasurementId.value = null
+      measurementDeleteBtnPos.value = null
+
+      // 以测距线上离点击位置最近的点作为测距起点
+      isMeasuring.value = true
+      isMeasurePending.value = false
+      measureStart.value = clickedMeasurement.closestPointOnLine
+      measureEnd.value = clickedMeasurement.closestPointOnLine
+      canMeasureDrag.value = false
+      scheduleDraw()
+      return
+    }
+
+    // 单击测距线：选中测距线
     if (clickedMeasurement) {
       selectedMeasurementId.value = clickedMeasurement.id
       scheduleDraw()
       return
     }
 
-    // 检测双击
-    const now = Date.now()
-    const isDoubleClick = now - lastClickTime.value < DOUBLE_CLICK_DELAY
-    lastClickTime.value = now
+    // 检测是否点击了多边形（用于选中）
+    const clickedPolygon = detectPolygonClick(worldPos)
+    if (clickedPolygon) {
+      selectedId.value = clickedPolygon.id
+      selectedMeasurementId.value = null
+      scheduleDraw()
+      return
+    }
 
     // 双击 或 Ctrl+左键：开始测距或结束测距
     if (isDoubleClick || e.ctrlKey) {
-      // Ctrl+左键：开始测距或结束测距
+      // 设置标志忽略下一次单击（即本次点击的释放）
+      ignoreNextClick.value = true
+
       selectedMeasurementId.value = null
       measurementDeleteBtnPos.value = null
 
@@ -938,9 +1284,42 @@ const handleMouseUp = (e: MouseEvent) => {
   if (e.button === 0) {
     // 测距中左键释放
     if (isMeasuring.value) {
-      // 重置测距拖动状态，但不落下终点
-      // 终点只能通过 Ctrl+左键 或 双击左键 落下
+      if (!isMeasureDragging.value && !ignoreNextClick.value) {
+        // 单击（非拖动）：结束测距，落下终点
+        const canvas = canvasRef.value
+        if (canvas) {
+          const rect = canvas.getBoundingClientRect()
+          const clickX = e.clientX - rect.left
+          const clickY = e.clientY - rect.top
+          const centerX = canvas.width / 2
+          const centerY = canvas.height / 2
+          const worldPos = {
+            x: (clickX - centerX - viewState.value.offsetX) / viewState.value.scale,
+            y: (clickY - centerY - viewState.value.offsetY) / viewState.value.scale
+          }
+
+          const snap = detectSnap(worldPos)
+          const finalPoint = snap.point || worldPos
+
+          if (measureStart.value) {
+            const distance = calculateDistance(measureStart.value, finalPoint)
+            measurements.value.push({
+              id: generateId(),
+              start: { ...measureStart.value },
+              end: { ...finalPoint },
+              distance
+            })
+          }
+          isMeasuring.value = false
+          isMeasurePending.value = false
+          measureStart.value = null
+          measureEnd.value = null
+          scheduleDraw()
+        }
+      }
+      // 重置测距拖动状态和双击忽略标志
       isMeasureDragging.value = false
+      ignoreNextClick.value = false
     }
   }
 
@@ -1297,6 +1676,14 @@ onUnmounted(() => {
         <span v-if="selectedMeasurementId" class="info-value selected">已选中</span>
         <span v-else-if="hoveredMeasurementId" class="info-value hover">悬浮中</span>
       </div>
+
+      <!-- 选中多边形信息 -->
+      <div v-if="selectedPolygon" class="info-item polygon-info">
+        <span class="info-label polygon-name" :style="{ color: selectedPolygon.color }">{{ selectedPolygon.name }}</span>
+        <span class="info-value">顶点: {{ selectedPolygon.points.length }}</span>
+        <span class="info-value">面积: {{ calculatePolygonArea(selectedPolygon.points).toFixed(2) }}</span>
+        <span class="info-value">周长: {{ calculatePolygonPerimeter(selectedPolygon.points).toFixed(2) }}</span>
+      </div>
     </div>
 
     <!-- 操作提示 -->
@@ -1308,7 +1695,7 @@ onUnmounted(() => {
         <span class="key">左键拖拽</span>
         <span>移动画布</span>
         <span class="divider">|</span>
-        <span class="key">Ctrl+左键</span>
+        <span class="key">双击/Ctrl+左键</span>
         <span>测距</span>
         <span class="divider">|</span>
         <span class="key">右键拖拽</span>
@@ -1462,20 +1849,20 @@ onUnmounted(() => {
   justify-content: center;
   gap: 6px;
   padding: 12px 14px;
-  background: rgba(255, 107, 107, 0.1);
-  border: 1px solid rgba(255, 107, 107, 0.3);
+  background: rgba(0, 255, 136, 0.1);
+  border: 1px solid rgba(0, 255, 136, 0.3);
   border-radius: 10px;
   font-size: 13px;
   font-weight: 500;
-  color: #ff6b6b;
+  color: #00ff88;
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .btn-test:hover {
-  background: rgba(255, 107, 107, 0.2);
-  border-color: rgba(255, 107, 107, 0.5);
-  box-shadow: 0 0 20px rgba(255, 107, 107, 0.3);
+  background: rgba(0, 255, 136, 0.2);
+  border-color: rgba(0, 255, 136, 0.5);
+  box-shadow: 0 0 20px rgba(0, 255, 136, 0.3);
 }
 
 .btn-danger {
@@ -1622,6 +2009,19 @@ onUnmounted(() => {
   box-shadow: 0 0 30px rgba(0, 245, 255, 0.3);
 }
 
+.info-item.polygon-info {
+  border-color: rgba(0, 255, 136, 0.5);
+  box-shadow: 0 0 30px rgba(0, 255, 136, 0.3);
+}
+
+.info-label.polygon-name {
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+  text-shadow: 0 0 10px currentColor;
+}
+
 .info-value.measure {
   color: #00f5ff;
   font-size: 16px;
@@ -1655,7 +2055,7 @@ onUnmounted(() => {
 
 .info-value.zoom {
   font-size: 16px;
-  color: #ff6b6b;
+  color: #00ff88;
 }
 
 .info-value.highlight {

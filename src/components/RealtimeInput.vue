@@ -115,44 +115,31 @@ watch(inputText, () => {
 
 <template>
   <div class="realtime-input">
-    <label class="input-label">
-      <span class="label-icon">📐</span>
-      输入点集 (JSON)
-      <span v-if="is3DMode" class="mode-badge">3D</span>
-      <span v-else-if="isValid" class="valid-badge">✓</span>
-    </label>
-    <textarea
-      v-model="inputText"
-      placeholder='[{"x": 100, "y": 100}, {"x": 200, "y": 100}] 或 [{"X": 114.73, "Y": 280, "Z": 511.39}, ...]'
-      rows="6"
-      class="glass-input"
-      :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode }"
-    ></textarea>
-    <p v-if="localError" class="error-msg">
-      <span class="error-icon">⚠</span>
-      {{ localError }}
-    </p>
-    
-    <!-- 操作按钮行 -->
-    <div class="action-row">
-      <button class="btn-test" @click="emit('generateRandom')" title="生成随机测试多边形">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-          <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
-          <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
-        </svg>
-        测试
-      </button>
-      
-      <button class="btn-print" @click="emit('printGeometries')" title="打印图形信息到控制台">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="6 9 6 2 18 2 18 9"></polyline>
-          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
-          <rect x="6" y="14" width="12" height="8"></rect>
-        </svg>
-        打印
-      </button>
+    <div class="input-row">
+      <input
+        v-model="inputText"
+        placeholder='粘贴点集...'
+        class="glass-input"
+        :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode }"
+      />
+      <div class="action-btns">
+        <button class="btn-test" @click="emit('generateRandom')" title="生成随机测试多边形">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
+            <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
+            <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
+          </svg>
+        </button>
+        <button class="btn-print" @click="emit('printGeometries')" title="打印图形信息到控制台">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 6 2 18 2 18 9"></polyline>
+            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+            <rect x="6" y="14" width="12" height="8"></rect>
+          </svg>
+        </button>
+      </div>
     </div>
+    <p v-if="localError" class="error-msg">{{ localError }}</p>
   </div>
 </template>
 
@@ -161,54 +148,22 @@ watch(inputText, () => {
   width: 100%;
 }
 
-.input-label {
+.input-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.7);
-  margin-bottom: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.label-icon {
-  font-size: 14px;
-}
-
-.valid-badge {
-  margin-left: auto;
-  padding: 2px 8px;
-  background: rgba(0, 255, 136, 0.2);
-  border: 1px solid rgba(0, 255, 136, 0.5);
-  border-radius: 12px;
-  font-size: 11px;
-  color: #00ff88;
-}
-
-.mode-badge {
-  margin-left: auto;
-  padding: 2px 8px;
-  background: rgba(255, 107, 107, 0.2);
-  border: 1px solid rgba(255, 107, 107, 0.5);
-  border-radius: 12px;
-  font-size: 11px;
-  color: #ff6b6b;
 }
 
 .glass-input {
-  width: 100%;
-  padding: 14px;
+  flex: 1;
+  padding: 10px 12px;
   background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
+  border-radius: 8px;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 12px;
   color: #00f5ff;
-  resize: vertical;
   transition: all 0.3s ease;
-  line-height: 1.6;
 }
 
 .glass-input::placeholder {
@@ -224,74 +179,55 @@ watch(inputText, () => {
 
 .glass-input.valid {
   border-color: rgba(0, 255, 136, 0.5);
-  box-shadow: 0 0 0 3px rgba(0, 255, 136, 0.1);
 }
 
 .glass-input.invalid {
   border-color: rgba(255, 107, 107, 0.5);
-  box-shadow: 0 0 0 3px rgba(255, 107, 107, 0.1);
 }
 
 .glass-input.mode-3d {
   border-color: rgba(255, 0, 255, 0.5);
-  box-shadow: 0 0 0 3px rgba(255, 0, 255, 0.1);
 }
 
 .error-msg {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 10px 0 0 0;
-  font-size: 12px;
+  margin: 6px 0 0 0;
+  font-size: 11px;
   color: #ff6b6b;
 }
 
-.error-icon {
-  font-size: 14px;
-}
-
-.action-row {
+.action-btns {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  gap: 6px;
 }
 
 .btn-test {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 10px 16px;
-  background: rgba(255, 107, 107, 0.1);
-  border: 1px solid rgba(255, 107, 107, 0.3);
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  color: #ff6b6b;
+  padding: 8px;
+  background: rgba(0, 255, 136, 0.1);
+  border: 1px solid rgba(0, 255, 136, 0.3);
+  border-radius: 6px;
+  color: #00ff88;
   cursor: pointer;
   transition: all 0.3s ease;
 }
 
 .btn-test:hover {
-  background: rgba(255, 107, 107, 0.2);
-  border-color: rgba(255, 107, 107, 0.5);
-  box-shadow: 0 0 20px rgba(255, 107, 107, 0.3);
+  background: rgba(0, 255, 136, 0.2);
+  border-color: rgba(0, 255, 136, 0.5);
+  box-shadow: 0 0 10px rgba(0, 255, 136, 0.3);
 }
 
 .btn-print {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  padding: 10px 16px;
+  padding: 8px;
   background: rgba(0, 245, 255, 0.1);
   border: 1px solid rgba(0, 245, 255, 0.3);
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
+  border-radius: 6px;
   color: #00f5ff;
   cursor: pointer;
   transition: all 0.3s ease;
@@ -300,6 +236,6 @@ watch(inputText, () => {
 .btn-print:hover {
   background: rgba(0, 245, 255, 0.2);
   border-color: rgba(0, 245, 255, 0.5);
-  box-shadow: 0 0 20px rgba(0, 245, 255, 0.3);
+  box-shadow: 0 0 10px rgba(0, 245, 255, 0.3);
 }
 </style>

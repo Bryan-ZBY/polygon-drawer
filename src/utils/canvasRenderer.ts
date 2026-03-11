@@ -137,6 +137,29 @@ export const distance = (p1: Point, p2: Point): number => {
   return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2))
 }
 
+// 计算多边形面积（使用鞋带公式）
+export const calculatePolygonArea = (points: Point[]): number => {
+  if (points.length < 3) return 0
+  let area = 0
+  for (let i = 0; i < points.length; i++) {
+    const j = (i + 1) % points.length
+    area += points[i].x * points[j].y
+    area -= points[j].x * points[i].y
+  }
+  return Math.abs(area) / 2
+}
+
+// 计算多边形周长
+export const calculatePolygonPerimeter = (points: Point[]): number => {
+  if (points.length < 2) return 0
+  let perimeter = 0
+  for (let i = 0; i < points.length; i++) {
+    const j = (i + 1) % points.length
+    perimeter += distance(points[i], points[j])
+  }
+  return perimeter
+}
+
 // 绘制多边形 - 性能优化版本
 export const drawPolygon = (
   ctx: CanvasRenderingContext2D,

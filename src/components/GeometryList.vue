@@ -48,72 +48,62 @@ const getPointCount = (geometry: Geometry) => {
 </script>
 
 <template>
-  <div class="geometry-section" v-if="geometries.length > 0">
-    <div class="section-header">
-      <span class="section-title">图形列表</span>
-      <span class="badge">{{ geometries.length }}</span>
-    </div>
-    
-    <div class="geometry-list">
-      <div 
-        v-for="geometry in geometries" 
-        :key="geometry.id"
-        class="geometry-card"
-        :class="{ 
-          selected: selectedId === geometry.id,
-          hidden: !geometry.visible 
-        }"
-        @click="emit('select', geometry.id)"
-      >
-        <div class="card-glow" :style="{ backgroundColor: geometry.visible ? geometry.color : 'transparent' }"></div>
+  <div class="geometry-list">
+    <div
+      v-for="geometry in geometries"
+      :key="geometry.id"
+      class="geometry-card"
+      :class="{ selected: selectedId === geometry.id, hidden: !geometry.visible }"
+      @click="emit('select', geometry.id)"
+    >
+      <div class="card-glow" :style="{ backgroundColor: geometry.visible ? geometry.color : 'transparent' }"></div>
+      
+      <div class="card-content">
+        <div class="type-icon" :style="{ color: geometry.color, opacity: geometry.visible ? 1 : 0.3 }">
+          {{ getGeometryIcon(geometry.type) }}
+        </div>
         
-        <div class="card-content">
-          <div class="type-icon" :style="{ color: geometry.color, opacity: geometry.visible ? 1 : 0.3 }">
-            {{ getGeometryIcon(geometry.type) }}
-          </div>
-          
-          <div class="card-info">
-            <span class="card-name">{{ geometry.name }}</span>
-            <span class="card-meta">{{ getPointCount(geometry) }} 个点 · {{ geometry.type }}</span>
-          </div>
-          
-          <div class="card-actions">
-            <button 
-              class="action-btn"
-              :class="{ inactive: !geometry.visible }"
-              @click.stop="emit('toggleVisibility', geometry)"
-              :title="geometry.visible ? '隐藏' : '显示'"
-            >
-              <svg v-if="geometry.visible" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                <circle cx="12" cy="12" r="3"></circle>
-              </svg>
-              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                <line x1="1" y1="1" x2="23" y2="23"></line>
-              </svg>
-            </button>
-            <button 
-              class="action-btn"
-              @click.stop="emit('startRename', geometry)"
-              title="重命名"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-              </svg>
-            </button>
-            <button 
-              class="action-btn delete"
-              @click.stop="emit('delete', geometry.id)"
-              title="删除"
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="3 6 5 6 21 6"></polyline>
-                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-              </svg>
-            </button>
-          </div>
+        <div class="card-info">
+          <span class="card-name">{{ geometry.name }}</span>
+          <span class="card-meta">{{ getPointCount(geometry) }} 个点 · {{ geometry.type }}</span>
+        </div>
+        
+        <div class="card-actions">
+          <button 
+            class="action-btn"
+            :class="{ inactive: !geometry.visible }"
+            @click.stop="emit('toggleVisibility', geometry)"
+            :title="geometry.visible ? '隐藏' : '显示'"
+          >
+            <svg v-if="geometry.visible" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+              <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+            <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+              <line x1="1" y1="1" x2="23" y2="23"></line>
+            </svg>
+          </button>
+          <button 
+            class="action-btn"
+            @click.stop="emit('startRename', geometry)"
+            title="重命名"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+            </svg>
+          </button>
+          <button 
+            class="action-btn delete"
+            @click.stop="emit('delete', geometry.id)"
+            title="删除"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -121,36 +111,6 @@ const getPointCount = (geometry: Geometry) => {
 </template>
 
 <style scoped>
-.geometry-section {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 14px;
-}
-
-.section-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.5);
-  text-transform: uppercase;
-  letter-spacing: 1px;
-}
-
-.badge {
-  padding: 4px 10px;
-  background: rgba(0, 245, 255, 0.15);
-  border-radius: 20px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #00f5ff;
-}
-
 .geometry-list {
   display: flex;
   flex-direction: column;
@@ -162,9 +122,10 @@ const getPointCount = (geometry: Geometry) => {
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 12px;
-  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: all 0.2s ease;
 }
 
 .geometry-card:hover {
@@ -190,6 +151,7 @@ const getPointCount = (geometry: Geometry) => {
   height: 2px;
   opacity: 0.6;
   transition: opacity 0.3s ease;
+  border-radius: 12px 12px 0 0;
 }
 
 .geometry-card:hover .card-glow {
