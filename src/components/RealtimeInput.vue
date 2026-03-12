@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
-import type { Geometry, Polygon, PolygonGroup, ParseResult } from '@/types'
+import type { Geometry, Polygon, PolygonGroup, ParseResult, PolygonEdge } from '@/types'
 import { GeometryType, generateId, getNextColor } from '@/types'
 import { parse3DPoints, is3DFormat } from '@/utils/geometry3d'
 
@@ -13,6 +13,7 @@ const props = defineProps<Props>()
 const emit = defineEmits<{
   add: [geometry: Omit<Geometry, 'id' | 'name' | 'color'>, isRealtime: boolean, originalData?: unknown]
   addGroup: [group: Omit<PolygonGroup, 'id' | 'name' | 'color'>, originalData?: unknown[]]
+  addArcPolygon: [edges: PolygonEdge[]]
   generateRandom: []
   printGeometries: []
 }>()
@@ -22,6 +23,7 @@ const localError = ref('')
 const isValid = ref(false)
 const is3DMode = ref(false)
 const isProcessing = ref(false)
+const inputMode = ref<'points' | 'edges'>('points')
 
 // 常量配置
 const MAX_POINTS = 10000 // 最大点数限制
@@ -113,32 +115,97 @@ const parsePolygon = (input: string): ParseResult<Polygon> => {
   }
 }
 
-// 解析边数据格式
+// 解析边数据格式为 PolygonEdge[]
+const parseEdgesToPolygonEdges = (edges: unknown[]): { success: boolean; edges?: PolygonEdge[]; error?: string } => {
+  try {
+    const polygonEdges: PolygonEdge[] = []
+    
+    for (let i = 0; i < edges.length; i++) {
+      const edge = edges[i] as any
+      
+      // 验证边数据格式
+      if (!edge.P1 && !edge.p1) {
+        return { success: false, error: `第 ${i + 1} 条边必须包含 P1 或 p1` }
+      }
+      if (!edge.P2 && !edge.p2) {
+        return { success: false, error: `第 ${i + 1} 条边必须包含 P2 或 p2` }
+      }
+      
+      const p1 = edge.P1 || edge.p1
+      const p2 = edge.P2 || edge.p2
+      
+      if (typeof p1.X !== 'number' && typeof p1.x !== 'number') {
+        return { success: false, error: `第 ${i + 1} 条边的 P1 X 坐标必须是数字` }
+      }
+      if (typeof p1.Y !== 'number' && typeof p1.y !== 'number') {
+        return { success: false, error: `第 ${i + 1} 条边的 P1 Y 坐标必须是数字` }
+      }
+      if (typeof p2.X !== 'number' && typeof p2.x !== 'number') {
+        return { success: false, error: `第 ${i + 1} 条边的 P2 X 坐标必须是数字` }
+      }
+      if (typeof p2.Y !== 'number' && typeof p2.y !== 'number') {
+        return { success: false, error: `第 ${i + 1} 条边的 P2 Y 坐标必须是数字` }
+      }
+      
+      polygonEdges.push({
+        p1: { 
+          x: typeof p1.X === 'number' ? p1.X : p1.x, 
+          y: typeof p1.Y === 'number' ? p1.Y : p1.y 
+        },
+        p2: { 
+          x: typeof p2.X === 'number' ? p2.X : p2.x, 
+          y: typeof p2.Y === 'number' ? p2.Y : p2.y 
+        },
+        id: edge.ID || edge.id || `edge_${i}`,
+        archHeight: edge.ArchHeight || edge.archHeight || 0,
+        isInnerArc: edge.IsInnerArc !== undefined ? edge.IsInnerArc : (edge.isInnerArc || false)
+      })
+    }
+    
+    if (polygonEdges.length < 3) {
+      return { success: false, error: '至少需要3条边才能绘制多边形' }
+    }
+    
+    return { success: true, edges: polygonEdges }
+  } catch (e) {
+    return { success: false, error: '边数据解析错误' }
+  }
+}
+
+// 解析边数据格式（旧版，转换为普通多边形点集）
 const parseEdgesFormat = (edges: unknown[]): ParseResult<Polygon> => {
   try {
     const points: { x: number; y: number }[] = []
     
     // 构建点集，假设边是连续的
     for (let i = 0; i < edges.length; i++) {
-      const edge = edges[i]
+      const edge = edges[i] as any
       
       // 验证边数据格式
-      if (!edge.P1 || !edge.P2) {
-        return { success: false, error: '边数据必须包含 P1 和 P2' }
+      const p1 = edge.P1 || edge.p1
+      const p2 = edge.P2 || edge.p2
+      
+      if (!p1 || !p2) {
+        return { success: false, error: '边数据必须包含 P1/P2 或 p1/p2' }
       }
       
-      if (typeof edge.P1.X !== 'number' || typeof edge.P1.Y !== 'number' ||
-          typeof edge.P2.X !== 'number' || typeof edge.P2.Y !== 'number') {
+      const x1 = typeof p1.X === 'number' ? p1.X : p1.x
+      const y1 = typeof p1.Y === 'number' ? p1.Y : p1.y
+      const x2 = typeof p2.X === 'number' ? p2.X : p2.x
+      const y2 = typeof p2.Y === 'number' ? p2.Y : p2.y
+      
+      if (typeof x1 !== 'number' || typeof y1 !== 'number' ||
+          typeof x2 !== 'number' || typeof y2 !== 'number') {
         return { success: false, error: '边的坐标必须是数字' }
       }
       
       // 添加起点（第一条边）或检查连续性
       if (i === 0) {
-        points.push({ x: edge.P1.X, y: edge.P1.Y })
+        points.push({ x: x1, y: y1 })
       }
       
       // 添加终点
-      points.push({ x: edge.P2.X, y: edge.P2.Y })
+      points.push({ x: x2, y: y2 })
     }
     
     // 检查是否形成闭合多边形
@@ -384,6 +451,27 @@ const processInput = () => {
         return
       }
       
+      // 检查是否是边集模式（包含 ArchHeight 或 IsInnerArc 属性）
+      const hasArcProperties = data.length > 0 && data[0] && (
+        data[0].ArchHeight !== undefined || data[0].archHeight !== undefined ||
+        data[0].IsInnerArc !== undefined || data[0].isInnerArc !== undefined
+      )
+      
+      if (hasArcProperties || inputMode.value === 'edges') {
+        // 解析为带拱形的多边形
+        const result = parseEdgesToPolygonEdges(data)
+        if (result.success && result.edges) {
+          isValid.value = true
+          is3DMode.value = false
+          emit('addArcPolygon', result.edges)
+          inputText.value = ''
+        } else {
+          isValid.value = false
+          localError.value = result.error || '边数据解析失败'
+        }
+        return
+      }
+      
       if (data.length > 0 && Array.isArray(data[0])) {
         // 是多边形组格式
         const result = parsePolygonGroup(data)
@@ -395,6 +483,29 @@ const processInput = () => {
         } else {
           isValid.value = false
           localError.value = result.error || ''
+        }
+        return
+      }
+      
+      // 检查是否是边数据格式（包含 P1, P2 属性但没有拱形属性）
+      if (data.length > 0 && data[0] && (data[0].P1 || data[0].p1) && (data[0].P2 || data[0].p2)) {
+        // 边数据格式，转换为普通多边形
+        is3DMode.value = false
+        const result = parseEdgesFormat(data)
+        
+        if (result.success && result.data) {
+          isValid.value = true
+          let originalData: unknown = null
+          try {
+            originalData = JSON.parse(text)
+          } catch {
+            // 解析失败则不保存原始数据
+          }
+          emit('add', result.data, false, originalData)
+          inputText.value = ''
+        } else if (result.error) {
+          isValid.value = false
+          localError.value = result.error
         }
         return
       }
@@ -437,12 +548,30 @@ watch(inputText, () => {
 
 <template>
   <div class="realtime-input">
+    <div class="input-mode-tabs">
+      <button 
+        class="mode-tab" 
+        :class="{ active: inputMode === 'points' }"
+        @click="inputMode = 'points'"
+      >
+        点集模式
+      </button>
+      <button 
+        class="mode-tab" 
+        :class="{ active: inputMode === 'edges' }"
+        @click="inputMode = 'edges'"
+      >
+        边集模式 (拱形)
+      </button>
+    </div>
     <div class="input-row">
       <input
         v-model="inputText"
-        placeholder='📋 粘贴多边形数据 (JSON格式)'
+        :placeholder="inputMode === 'edges' 
+          ? '📋 粘贴边集数据 (支持 ArchHeight/IsInnerArc)' 
+          : '📋 粘贴多边形数据 (JSON格式)'"
         class="glass-input"
-        :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode, processing: isProcessing }"
+        :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode, processing: isProcessing, 'mode-edges': inputMode === 'edges' }"
         :disabled="isProcessing"
       />
       <div class="action-btns">
@@ -469,6 +598,35 @@ watch(inputText, () => {
 <style scoped>
 .realtime-input {
   width: 100%;
+}
+
+.input-mode-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.mode-tab {
+  flex: 1;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.mode-tab:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mode-tab.active {
+  background: rgba(0, 245, 255, 0.15);
+  border-color: rgba(0, 245, 255, 0.4);
+  color: #00f5ff;
 }
 
 .input-row {
@@ -514,6 +672,11 @@ watch(inputText, () => {
 .glass-input.mode-3d {
   border-color: rgba(255, 0, 255, 0.6);
   box-shadow: 0 0 20px rgba(255, 0, 255, 0.15);
+}
+
+.glass-input.mode-edges {
+  border-color: rgba(255, 165, 0, 0.6);
+  box-shadow: 0 0 20px rgba(255, 165, 0, 0.15);
 }
 
 .glass-input.processing {

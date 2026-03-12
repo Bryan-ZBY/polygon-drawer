@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { Geometry, Polygon, ParseResult } from '@/types'
+import type { Geometry, Polygon, ArcPolygon, ParseResult, PolygonEdge } from '@/types'
 import { GeometryType } from '@/types'
 
 interface Props {
@@ -12,6 +12,7 @@ const props = defineProps<Props>()
 
 const emit = defineEmits<{
   add: [geometry: Geometry]
+  addArcPolygon: [edges: PolygonEdge[]]
   error: [message: string]
   clear: []
   resetView: []
@@ -21,8 +22,9 @@ const emit = defineEmits<{
 
 const inputText = ref('')
 const localError = ref('')
+const inputMode = ref<'points' | 'edges'>('points')
 
-// 多边形解析器
+// 普通多边形解析器（点集格式）
 const parsePolygon = (input: string): ParseResult<Polygon> => {
   try {
     const data = JSON.parse(input)
@@ -59,9 +61,52 @@ const parsePolygon = (input: string): ParseResult<Polygon> => {
   }
 }
 
-// 主解析函数 - 可扩展支持更多格式
+// 拱形多边形解析器（边集格式）
+const parseArcPolygon = (input: string): ParseResult<PolygonEdge[]> => {
+  try {
+    const data = JSON.parse(input)
+    
+    if (!Array.isArray(data)) {
+      return { success: false, error: '输入必须是数组格式' }
+    }
+    
+    const edges: PolygonEdge[] = data.map((item: any, index: number) => {
+      // 支持 P1/P2 或 p1/p2 格式
+      const p1 = item.P1 || item.p1
+      const p2 = item.P2 || item.p2
+      
+      if (!p1 || !p2 || typeof p1.X !== 'number' || typeof p1.Y !== 'number' ||
+          typeof p2.X !== 'number' || typeof p2.Y !== 'number') {
+        throw new Error(`第 ${index + 1} 条边的点格式不正确`)
+      }
+      
+      return {
+        p1: { x: p1.X, y: p1.Y },
+        p2: { x: p2.X, y: p2.Y },
+        id: item.ID || item.id || `edge_${index}`,
+        archHeight: item.ArchHeight || item.archHeight || 0,
+        isInnerArc: item.IsInnerArc !== undefined ? item.IsInnerArc : (item.isInnerArc || false)
+      }
+    })
+    
+    if (edges.length < 3) {
+      return { success: false, error: '至少需要3条边才能绘制多边形' }
+    }
+    
+    return { 
+      success: true, 
+      data: edges
+    }
+  } catch (e: any) {
+    return { success: false, error: e.message || 'JSON 格式错误，请检查输入' }
+  }
+}
+
+// 主解析函数
 const parseInput = (input: string): ParseResult => {
-  // 目前只支持多边形，后续可扩展
+  if (inputMode.value === 'edges') {
+    return parseArcPolygon(input)
+  }
   return parsePolygon(input)
 }
 
@@ -70,7 +115,7 @@ const handleAdd = () => {
   emit('clear')
   
   if (!inputText.value.trim()) {
-    localError.value = '请输入点集数据'
+    localError.value = inputMode.value === 'edges' ? '请输入边集数据' : '请输入点集数据'
     emit('error', localError.value)
     return
   }
@@ -83,7 +128,11 @@ const handleAdd = () => {
     return
   }
   
-  emit('add', result.data)
+  if (inputMode.value === 'edges') {
+    emit('addArcPolygon', result.data as PolygonEdge[])
+  } else {
+    emit('add', result.data as Geometry)
+  }
   inputText.value = ''
 }
 
@@ -104,13 +153,32 @@ const handleClear = () => {
     </div>
     
     <div class="input-section">
+      <div class="input-mode-tabs">
+        <button 
+          class="mode-tab" 
+          :class="{ active: inputMode === 'points' }"
+          @click="inputMode = 'points'"
+        >
+          点集模式
+        </button>
+        <button 
+          class="mode-tab" 
+          :class="{ active: inputMode === 'edges' }"
+          @click="inputMode = 'edges'"
+        >
+          边集模式 (拱形)
+        </button>
+      </div>
+      
       <label class="input-label">
         <span class="label-icon">📐</span>
-        输入点集 (JSON)
+        {{ inputMode === 'edges' ? '输入边集 (JSON)' : '输入点集 (JSON)' }}
       </label>
       <textarea
         v-model="inputText"
-        placeholder='[{"x": 100, "y": 100}, {"x": 200, "y": 100}, {"x": 150, "y": 200}]'
+        :placeholder="inputMode === 'edges' 
+          ? '[{\"P1\": {\"X\": 62, \"Y\": -100}, \"P2\": {\"X\": 62, \"Y\": -76}, \"ArchHeight\": 8.3, \"IsInnerArc\": true}]' 
+          : '[{\"x\": 100, \"y\": 100}, {\"x\": 200, \"y\": 100}, {\"x\": 150, \"y\": 200}]'"
         rows="6"
         class="glass-input"
       ></textarea>
@@ -221,6 +289,35 @@ const handleClear = () => {
 
 .input-section {
   margin-bottom: 20px;
+}
+
+.input-mode-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.mode-tab {
+  flex: 1;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.mode-tab:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mode-tab.active {
+  background: rgba(0, 245, 255, 0.15);
+  border-color: rgba(0, 245, 255, 0.4);
+  color: #00f5ff;
 }
 
 .input-label {

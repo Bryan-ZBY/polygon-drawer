@@ -73,8 +73,23 @@ export interface PolygonGroup {
   opacity?: number  // 透明度（用于显示隐藏动画）
 }
 
+// 多边形边（支持拱形）
+export interface PolygonEdge {
+  p1: Point
+  p2: Point
+  id: string
+  archHeight: number
+  isInnerArc: boolean
+}
+
+// 带拱形的多边形
+export interface ArcPolygon extends BaseGeometry {
+  type: GeometryType.POLYGON
+  edges: PolygonEdge[]
+}
+
 // 联合类型
-export type Geometry = Polygon | Line | Circle | Rectangle | Measurement | PolygonGroup
+export type Geometry = Polygon | Line | Circle | Rectangle | Measurement | PolygonGroup | ArcPolygon
 
 // 视图状态
 export interface ViewState {

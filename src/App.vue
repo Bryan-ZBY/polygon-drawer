@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import type { Geometry, Polygon, PolygonGroup, ViewState, Point } from '@/types'
-import { generateId, getNextColor } from '@/types'
+import type { Geometry, Polygon, PolygonGroup, ViewState, Point, PolygonEdge, ArcPolygon } from '@/types'
+import { generateId, getNextColor, GeometryType } from '@/types'
 import { 
   clearCanvas, 
   drawGrid, 
@@ -9,7 +9,8 @@ import {
   detectHover,
   calculatePolygonArea,
   calculatePolygonPerimeter,
-  isPointInPolygon
+  isPointInPolygon,
+  getArcPoints
 } from '@/utils/canvasRenderer'
 import { generateNonOverlappingPolygon } from '@/utils/geometryGenerator'
 import { calculateBoundingBox } from '@/utils/geometry'
@@ -279,6 +280,22 @@ const selectedMeasurement = computed(() => {
   if (!selectedMeasurementId.value) return null
   return measurements.value.find(m => m.id === selectedMeasurementId.value) || null
 })
+
+// 获取多边形或拱形多边形的点集
+const getGeometryPoints = (geometry: Polygon | ArcPolygon): Point[] => {
+  if ('edges' in geometry) {
+    // ArcPolygon - 从 edges 中提取点
+    const arcPolygon = geometry as ArcPolygon
+    if (arcPolygon.edges.length === 0) return []
+    const points = arcPolygon.edges.map(edge => edge.p1)
+    // 添加最后一个边的终点
+    points.push(arcPolygon.edges[arcPolygon.edges.length - 1].p2)
+    return points
+  } else {
+    // 普通 Polygon
+    return (geometry as Polygon).points
+  }
+}
 
 // 视图状态
 const viewState = ref<ViewState>({
@@ -1001,23 +1018,44 @@ const detectPolygonClick = (worldPos: Point): { polygon: Polygon; edgeIndex?: nu
     if (!geometry.visible) continue
 
     if (geometry.type === 'polygon') {
-      const polygon = geometry as Polygon
+      // 检查是否是带拱形的多边形
+      if ('edges' in geometry) {
+        const arcPolygon = geometry as ArcPolygon
+        
+        // 先检测是否点击了边
+        for (let j = 0; j < arcPolygon.edges.length; j++) {
+          const edge = arcPolygon.edges[j]
+          const { distance } = pointToSegmentDistance(worldPos, edge.p1, edge.p2)
 
-      // 先检测是否点击了边
-      const points = polygon.points
-      for (let j = 0; j < points.length; j++) {
-        const a = points[j]
-        const b = points[(j + 1) % points.length]
-        const { distance } = pointToSegmentDistance(worldPos, a, b)
-
-        if (distance < CLICK_THRESHOLD) {
-          return { polygon, edgeIndex: j }
+          if (distance < CLICK_THRESHOLD) {
+            return { polygon: arcPolygon as unknown as Polygon, edgeIndex: j }
+          }
         }
-      }
 
-      // 再检测是否点击了多边形内部
-      if (isPointInPolygon(worldPos, polygon.points)) {
-        return { polygon }
+        // 再检测是否点击了多边形内部（使用拱形点集）
+        const arcPoints = arcPolygon.edges.flatMap(edge => getArcPoints(edge))
+        if (isPointInPolygon(worldPos, arcPoints)) {
+          return { polygon: arcPolygon as unknown as Polygon }
+        }
+      } else {
+        const polygon = geometry as Polygon
+
+        // 先检测是否点击了边
+        const points = polygon.points
+        for (let j = 0; j < points.length; j++) {
+          const a = points[j]
+          const b = points[(j + 1) % points.length]
+          const { distance } = pointToSegmentDistance(worldPos, a, b)
+
+          if (distance < CLICK_THRESHOLD) {
+            return { polygon, edgeIndex: j }
+          }
+        }
+
+        // 再检测是否点击了多边形内部
+        if (isPointInPolygon(worldPos, polygon.points)) {
+          return { polygon }
+        }
       }
     } else if (geometry.type === 'group') {
       // 检测多边形组内的多边形
@@ -1180,18 +1218,53 @@ const detectSnap = (worldPos: Point): {
         }
       }
     } else if (geometry.type === 'polygon') {
-      const polygon = geometry as Polygon
-      for (const point of polygon.points) {
-        const dist = Math.sqrt(
-          Math.pow(point.x - worldPos.x, 2) +
-          Math.pow(point.y - worldPos.y, 2)
-        )
-        const screenDist = dist * viewState.value.scale
+      // 检查是否是带拱形的多边形
+      if ('edges' in geometry) {
+        // ArcPolygon - 使用 edges 的 p1 点作为顶点
+        const arcPolygon = geometry as ArcPolygon
+        for (const edge of arcPolygon.edges) {
+          const dist = Math.sqrt(
+            Math.pow(edge.p1.x - worldPos.x, 2) +
+            Math.pow(edge.p1.y - worldPos.y, 2)
+          )
+          const screenDist = dist * viewState.value.scale
 
-        if (screenDist < SNAP_THRESHOLD && screenDist < minDist) {
-          minDist = screenDist
-          snapPoint = point
-          snapType = 'vertex'
+          if (screenDist < SNAP_THRESHOLD && screenDist < minDist) {
+            minDist = screenDist
+            snapPoint = edge.p1
+            snapType = 'vertex'
+          }
+        }
+        // 还要检查最后一个边的 p2
+        if (arcPolygon.edges.length > 0) {
+          const lastEdge = arcPolygon.edges[arcPolygon.edges.length - 1]
+          const dist = Math.sqrt(
+            Math.pow(lastEdge.p2.x - worldPos.x, 2) +
+            Math.pow(lastEdge.p2.y - worldPos.y, 2)
+          )
+          const screenDist = dist * viewState.value.scale
+
+          if (screenDist < SNAP_THRESHOLD && screenDist < minDist) {
+            minDist = screenDist
+            snapPoint = lastEdge.p2
+            snapType = 'vertex'
+          }
+        }
+      } else {
+        // 普通 Polygon
+        const polygon = geometry as Polygon
+        for (const point of polygon.points) {
+          const dist = Math.sqrt(
+            Math.pow(point.x - worldPos.x, 2) +
+            Math.pow(point.y - worldPos.y, 2)
+          )
+          const screenDist = dist * viewState.value.scale
+
+          if (screenDist < SNAP_THRESHOLD && screenDist < minDist) {
+            minDist = screenDist
+            snapPoint = point
+            snapType = 'vertex'
+          }
         }
       }
     }
@@ -1225,18 +1298,35 @@ const detectSnap = (worldPos: Point): {
           }
         }
       } else if (geometry.type === 'polygon') {
-        const polygon = geometry as Polygon
-        const points = polygon.points
-        for (let i = 0; i < points.length; i++) {
-          const a = points[i]
-          const b = points[(i + 1) % points.length]
-          const { distance, closestPoint } = pointToSegmentDistance(worldPos, a, b)
-          const screenDist = distance * viewState.value.scale
+        // 检查是否是带拱形的多边形
+        if ('edges' in geometry) {
+          // ArcPolygon - 使用 edges 的线段
+          const arcPolygon = geometry as ArcPolygon
+          for (const edge of arcPolygon.edges) {
+            const { distance, closestPoint } = pointToSegmentDistance(worldPos, edge.p1, edge.p2)
+            const screenDist = distance * viewState.value.scale
 
-          if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < edgeMinDist) {
-            edgeMinDist = screenDist
-            edgeSnapPoint = closestPoint
-            bestEdge = { a, b }
+            if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < edgeMinDist) {
+              edgeMinDist = screenDist
+              edgeSnapPoint = closestPoint
+              bestEdge = { a: edge.p1, b: edge.p2 }
+            }
+          }
+        } else {
+          // 普通 Polygon
+          const polygon = geometry as Polygon
+          const points = polygon.points
+          for (let i = 0; i < points.length; i++) {
+            const a = points[i]
+            const b = points[(i + 1) % points.length]
+            const { distance, closestPoint } = pointToSegmentDistance(worldPos, a, b)
+            const screenDist = distance * viewState.value.scale
+
+            if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < edgeMinDist) {
+              edgeMinDist = screenDist
+              edgeSnapPoint = closestPoint
+              bestEdge = { a, b }
+            }
           }
         }
       }
@@ -1319,29 +1409,58 @@ const detectSnap = (worldPos: Point): {
           }
         }
       } else if (geometry.type === 'polygon') {
-        const polygon = geometry as Polygon
-        const points = polygon.points
-        for (let i = 0; i < points.length; i++) {
-          const a = points[i]
-          const b = points[(i + 1) % points.length]
+        // 检查是否是带拱形的多边形
+        if ('edges' in geometry) {
+          // ArcPolygon - 使用 edges 的线段
+          const arcPolygon = geometry as ArcPolygon
+          for (const edge of arcPolygon.edges) {
+            // 计算从测距起点到边的垂足
+            const foot = getPerpendicularFoot(start, edge.p1, edge.p2)
 
-          // 计算从测距起点到边的垂足
-          const foot = getPerpendicularFoot(start, a, b)
+            // 检查垂足是否在边线段上
+            const { distance: distFromSegment } = pointToSegmentDistance(foot, edge.p1, edge.p2)
+            const isFootOnSegment = distFromSegment < 0.001
 
-          // 检查垂足是否在边线段上
-          const { distance: distFromSegment } = pointToSegmentDistance(foot, a, b)
-          const isFootOnSegment = distFromSegment < 0.001
+            if (isFootOnSegment) {
+              // 计算鼠标位置到垂足的距离
+              const distToFoot = Math.sqrt(
+                Math.pow(foot.x - currentEnd.x, 2) +
+                Math.pow(foot.y - currentEnd.y, 2)
+              )
 
-          if (isFootOnSegment) {
-            // 计算鼠标位置到垂足的距离
-            const distToFoot = Math.sqrt(
-              Math.pow(foot.x - currentEnd.x, 2) +
-              Math.pow(foot.y - currentEnd.y, 2)
-            )
+              if (distToFoot < PERP_SNAP_DISTANCE) {
+                if (!bestPerpSnap || distToFoot < bestPerpSnap.distance) {
+                  bestPerpSnap = { point: foot, distance: distToFoot, target: 'polygon' }
+                }
+              }
+            }
+          }
+        } else {
+          // 普通 Polygon
+          const polygon = geometry as Polygon
+          const points = polygon.points
+          for (let i = 0; i < points.length; i++) {
+            const a = points[i]
+            const b = points[(i + 1) % points.length]
 
-            if (distToFoot < PERP_SNAP_DISTANCE) {
-              if (!bestPerpSnap || distToFoot < bestPerpSnap.distance) {
-                bestPerpSnap = { point: foot, distance: distToFoot, target: 'polygon' }
+            // 计算从测距起点到边的垂足
+            const foot = getPerpendicularFoot(start, a, b)
+
+            // 检查垂足是否在边线段上
+            const { distance: distFromSegment } = pointToSegmentDistance(foot, a, b)
+            const isFootOnSegment = distFromSegment < 0.001
+
+            if (isFootOnSegment) {
+              // 计算鼠标位置到垂足的距离
+              const distToFoot = Math.sqrt(
+                Math.pow(foot.x - currentEnd.x, 2) +
+                Math.pow(foot.y - currentEnd.y, 2)
+              )
+
+              if (distToFoot < PERP_SNAP_DISTANCE) {
+                if (!bestPerpSnap || distToFoot < bestPerpSnap.distance) {
+                  bestPerpSnap = { point: foot, distance: distToFoot, target: 'polygon' }
+                }
               }
             }
           }
@@ -1999,6 +2118,35 @@ const addPolygonGroup = (partialGroup: Omit<PolygonGroup, 'id' | 'name' | 'color
   }
 }
 
+// 添加带拱形的多边形
+const addArcPolygon = (edges: PolygonEdge[]) => {
+  errorMsg.value = ''
+
+  const newArcPolygon: ArcPolygon = {
+    id: generateId(),
+    name: `拱形多边形 ${geometries.value.length + 1}`,
+    type: GeometryType.POLYGON,
+    edges,
+    visible: true,
+    color: getNextColor()
+  }
+
+  geometries.value.push(newArcPolygon)
+
+  selectedId.value = newArcPolygon.id
+  
+  // 如果是第一个图形，先显示0.1秒再自适应缩放
+  if (geometries.value.length === 1) {
+    scheduleDraw()
+    setTimeout(() => {
+      fitViewToGeometry(newArcPolygon, true)
+    }, 100)
+  } else {
+    saveToHistory() // 保存历史记录
+    scheduleDraw()
+  }
+}
+
 // 切换多边形组的折叠状态
 const toggleGroupCollapse = (groupId: string) => {
   const group = geometries.value.find(g => g.id === groupId && g.type === 'group') as PolygonGroup | undefined
@@ -2195,12 +2343,25 @@ const fitViewToAll = () => {
     if (!geometry.visible) continue
     
     if (geometry.type === 'polygon') {
-      const polygon = geometry as Polygon
-      for (const point of polygon.points) {
-        minX = Math.min(minX, point.x)
-        maxX = Math.max(maxX, point.x)
-        minY = Math.min(minY, point.y)
-        maxY = Math.max(maxY, point.y)
+      // 检查是否是带拱形的多边形
+      if ('edges' in geometry) {
+        const arcPolygon = geometry as ArcPolygon
+        // 使用拱形点集计算边界
+        const arcPoints = arcPolygon.edges.flatMap(edge => getArcPoints(edge))
+        for (const point of arcPoints) {
+          minX = Math.min(minX, point.x)
+          maxX = Math.max(maxX, point.x)
+          minY = Math.min(minY, point.y)
+          maxY = Math.max(maxY, point.y)
+        }
+      } else {
+        const polygon = geometry as Polygon
+        for (const point of polygon.points) {
+          minX = Math.min(minX, point.x)
+          maxX = Math.max(maxX, point.x)
+          minY = Math.min(minY, point.y)
+          maxY = Math.max(maxY, point.y)
+        }
       }
     } else if (geometry.type === 'group') {
       const group = geometry as PolygonGroup
@@ -2256,8 +2417,16 @@ const fitViewToGeometry = (geometry: Geometry, animate: boolean = false) => {
   let bbox: { minX: number; maxX: number; minY: number; maxY: number } | null = null
 
   if (geometry.type === 'polygon') {
-    const polygon = geometry as Polygon
-    bbox = calculateBoundingBox(polygon.points)
+    // 检查是否是带拱形的多边形
+    if ('edges' in geometry) {
+      const arcPolygon = geometry as ArcPolygon
+      // 使用拱形点集计算边界框
+      const arcPoints = arcPolygon.edges.flatMap(edge => getArcPoints(edge))
+      bbox = calculateBoundingBox(arcPoints)
+    } else {
+      const polygon = geometry as Polygon
+      bbox = calculateBoundingBox(polygon.points)
+    }
   } else if (geometry.type === 'group') {
     const group = geometry as PolygonGroup
     // 计算组内所有多边形的总边界框
@@ -2381,17 +2550,35 @@ const printGeometries = () => {
     }
 
     if (geometry.type === 'polygon') {
-      const polygon = geometry as Polygon
-      obj.pointCount = polygon.points.length
-      obj.points = polygon.points.map((p, i) => ({
-        index: i + 1,
-        x: p.x,
-        y: p.y
-      }))
-      // 添加原始输入数据
-      const originalData = originalInputData.value.get(polygon.id)
-      if (originalData) {
-        obj.originalData = originalData
+      // 检查是否是带拱形的多边形
+      if ('edges' in geometry) {
+        const arcPolygon = geometry as ArcPolygon
+        obj.pointCount = arcPolygon.edges.length
+        obj.edges = arcPolygon.edges.map((edge, i) => ({
+          index: i + 1,
+          p1: { x: edge.p1.x, y: edge.p1.y },
+          p2: { x: edge.p2.x, y: edge.p2.y },
+          archHeight: edge.archHeight,
+          isInnerArc: edge.isInnerArc
+        }))
+        // 添加原始输入数据
+        const originalData = originalInputData.value.get(arcPolygon.id)
+        if (originalData) {
+          obj.originalData = originalData
+        }
+      } else {
+        const polygon = geometry as Polygon
+        obj.pointCount = polygon.points.length
+        obj.points = polygon.points.map((p, i) => ({
+          index: i + 1,
+          x: p.x,
+          y: p.y
+        }))
+        // 添加原始输入数据
+        const originalData = originalInputData.value.get(polygon.id)
+        if (originalData) {
+          obj.originalData = originalData
+        }
       }
     } else if (geometry.type === 'group') {
       const group = geometry as PolygonGroup
@@ -2560,6 +2747,7 @@ onUnmounted(() => {
         <RealtimeInput
           @add="addGeometry"
           @add-group="addPolygonGroup"
+          @add-arc-polygon="addArcPolygon"
           @generate-random="generateRandomTestPolygon"
           @print-geometries="printGeometries"
           :geometries-count="geometries.length"
@@ -2722,9 +2910,9 @@ onUnmounted(() => {
       <!-- 选中多边形信息 -->
       <div v-if="selectedPolygon && !selectedEdge" class="info-item polygon-info">
         <span class="info-label polygon-name" :style="{ color: selectedPolygon.color }">{{ selectedPolygon.name }}</span>
-        <span class="info-value">顶点: {{ selectedPolygon.points.length }}</span>
-        <span class="info-value">面积: {{ calculatePolygonArea(selectedPolygon.points).toFixed(2) }}</span>
-        <span class="info-value">周长: {{ calculatePolygonPerimeter(selectedPolygon.points).toFixed(2) }}</span>
+        <span class="info-value">顶点: {{ getGeometryPoints(selectedPolygon).length }}</span>
+        <span class="info-value">面积: {{ calculatePolygonArea(getGeometryPoints(selectedPolygon)).toFixed(2) }}</span>
+        <span class="info-value">周长: {{ calculatePolygonPerimeter(getGeometryPoints(selectedPolygon)).toFixed(2) }}</span>
       </div>
 
       <!-- 选中边信息 -->

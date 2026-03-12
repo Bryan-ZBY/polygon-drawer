@@ -7,7 +7,9 @@ import type {
   Rectangle, 
   Geometry, 
   ViewState,
-  BoundingBox 
+  BoundingBox,
+  PolygonEdge,
+  ArcPolygon
 } from '@/types'
 import { GeometryType } from '@/types'
 
@@ -316,27 +318,72 @@ export const detectHover = (
     if (!geometry.visible) continue
 
     if (geometry.type === GeometryType.POLYGON) {
-      const polygon = geometry as Polygon
+      // 检查是否是带拱形的多边形
+      if ('edges' in geometry) {
+        const arcPolygon = geometry as ArcPolygon
+        
+        // 检测顶点悬停 - 使用 edges 的 p1 点
+        arcPolygon.edges.forEach((edge, idx) => {
+          const screenP = worldToScreen(edge.p1, viewState, canvasWidth, canvasHeight)
+          const distSq = Math.pow(screenP.x - mouseX, 2) + Math.pow(screenP.y - mouseY, 2)
 
-      // 检测顶点悬停 - 使用平方距离避免开方运算
-      polygon.points.forEach((p, idx) => {
-        const screenP = worldToScreen(p, viewState, canvasWidth, canvasHeight)
-        const distSq = Math.pow(screenP.x - mouseX, 2) + Math.pow(screenP.y - mouseY, 2)
-
-        // 顶点检测阈值：15像素（平方为225）
-        if (distSq < 225 && distSq < minVertexDistance) {
-          minVertexDistance = distSq
-          hoveredVertex = {
-            geometryId: geometry.id,
-            vertexIndex: idx,
-            point: p
+          // 顶点检测阈值：15像素（平方为225）
+          if (distSq < 225 && distSq < minVertexDistance) {
+            minVertexDistance = distSq
+            hoveredVertex = {
+              geometryId: geometry.id,
+              vertexIndex: idx,
+              point: edge.p1
+            }
+          }
+        })
+        
+        // 还要检查最后一个边的 p2
+        if (arcPolygon.edges.length > 0) {
+          const lastEdge = arcPolygon.edges[arcPolygon.edges.length - 1]
+          const screenP = worldToScreen(lastEdge.p2, viewState, canvasWidth, canvasHeight)
+          const distSq = Math.pow(screenP.x - mouseX, 2) + Math.pow(screenP.y - mouseY, 2)
+          
+          if (distSq < 225 && distSq < minVertexDistance) {
+            minVertexDistance = distSq
+            hoveredVertex = {
+              geometryId: geometry.id,
+              vertexIndex: arcPolygon.edges.length,
+              point: lastEdge.p2
+            }
           }
         }
-      })
 
-      // 检测多边形内部悬停（如果还没有检测到顶点）
-      if (!hoveredVertex && isPointInPolygon(worldMouse, polygon.points)) {
-        hoveredGeometryId = geometry.id
+        // 检测多边形内部悬停（如果还没有检测到顶点）
+        if (!hoveredVertex) {
+          const arcPoints = arcPolygon.edges.flatMap(edge => getArcPoints(edge))
+          if (isPointInPolygon(worldMouse, arcPoints)) {
+            hoveredGeometryId = geometry.id
+          }
+        }
+      } else {
+        const polygon = geometry as Polygon
+
+        // 检测顶点悬停 - 使用平方距离避免开方运算
+        polygon.points.forEach((p, idx) => {
+          const screenP = worldToScreen(p, viewState, canvasWidth, canvasHeight)
+          const distSq = Math.pow(screenP.x - mouseX, 2) + Math.pow(screenP.y - mouseY, 2)
+
+          // 顶点检测阈值：15像素（平方为225）
+          if (distSq < 225 && distSq < minVertexDistance) {
+            minVertexDistance = distSq
+            hoveredVertex = {
+              geometryId: geometry.id,
+              vertexIndex: idx,
+              point: p
+            }
+          }
+        })
+
+        // 检测多边形内部悬停（如果还没有检测到顶点）
+        if (!hoveredVertex && isPointInPolygon(worldMouse, polygon.points)) {
+          hoveredGeometryId = geometry.id
+        }
       }
     } else if (geometry.type === 'group') {
       // 检测多边形组内的多边形
@@ -489,6 +536,126 @@ export const drawRectangle = (
   }
 }
 
+// 绘制带拱形的多边形
+export const drawArcPolygon = (
+  ctx: CanvasRenderingContext2D,
+  arcPolygon: ArcPolygon,
+  viewState: ViewState,
+  canvasWidth: number,
+  canvasHeight: number,
+  isHovered: boolean,
+  isSelected: boolean,
+  activeHoveredVertex: { geometryId: string; vertexIndex: number; point: Point } | null = null,
+  enableCulling: boolean = true,
+  opacity: number = 1
+): { screenPoints: Point[] } => {
+  const { edges } = arcPolygon
+  if (edges.length < 3) return { screenPoints: [] }
+  
+  // 如果透明度为0，跳过绘制
+  if (opacity <= 0) return { screenPoints: [] }
+  
+  // 收集所有点用于边界框计算
+  const allPoints: Point[] = []
+  edges.forEach(edge => {
+    const points = getArcPoints(edge)
+    allPoints.push(...points)
+  })
+  
+  // 视口裁剪
+  if (enableCulling) {
+    const bbox = calculateBoundingBox(allPoints)
+    if (!isBoundingBoxInViewport(bbox, viewState, canvasWidth, canvasHeight)) {
+      return { screenPoints: [] }
+    }
+  }
+  
+  // 检查当前多边形是否有悬停的顶点
+  const hasHoveredVertex = activeHoveredVertex?.geometryId === arcPolygon.id
+  const hoveredVertexIndex = hasHoveredVertex ? activeHoveredVertex?.vertexIndex : null
+  
+  // 生成所有屏幕坐标点
+  const screenPoints: Point[] = []
+  const edgeScreenPoints: Point[][] = []
+  
+  edges.forEach(edge => {
+    const arcPoints = getArcPoints(edge)
+    const edgeScreen = arcPoints.map(p => worldToScreen(p, viewState, canvasWidth, canvasHeight))
+    edgeScreenPoints.push(edgeScreen)
+    screenPoints.push(...edgeScreen)
+  })
+  
+  // 绘制路径
+  ctx.beginPath()
+  let isFirstPoint = true
+  edgeScreenPoints.forEach((edgePoints, edgeIndex) => {
+    edgePoints.forEach((p, pointIndex) => {
+      // 跳过每条边的最后一个点（除了最后一条边），避免重复点
+      if (edgeIndex < edgeScreenPoints.length - 1 && pointIndex === edgePoints.length - 1) {
+        return
+      }
+      
+      if (isFirstPoint) {
+        ctx.moveTo(p.x, p.y)
+        isFirstPoint = false
+      } else {
+        ctx.lineTo(p.x, p.y)
+      }
+    })
+  })
+  ctx.closePath()
+  
+  // 根据状态绘制
+  if (isHovered || isSelected) {
+    ctx.fillStyle = hexToRgba(arcPolygon.color, 0.2 * opacity)
+    ctx.fill()
+    
+    ctx.strokeStyle = hexToRgba(arcPolygon.color, opacity)
+    ctx.lineWidth = isSelected ? 2.5 : 2
+    ctx.stroke()
+  } else {
+    ctx.strokeStyle = hexToRgba(arcPolygon.color, opacity)
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+  }
+  
+  // 绘制顶点和序号（仅在悬停或选中时）
+  if (isHovered || isSelected) {
+    // 只绘制原始边的端点，不绘制拱形的中间点
+    edges.forEach((edge, edgeIndex) => {
+      const screenP = worldToScreen(edge.p1, viewState, canvasWidth, canvasHeight)
+      const isThisVertexHovered = hoveredVertexIndex === edgeIndex
+      
+      if (isThisVertexHovered) {
+        ctx.beginPath()
+        ctx.arc(screenP.x, screenP.y, 8, 0, Math.PI * 2)
+        ctx.fillStyle = '#ffff00'
+        ctx.fill()
+        
+        ctx.beginPath()
+        ctx.arc(screenP.x, screenP.y, 5, 0, Math.PI * 2)
+        ctx.fillStyle = '#ffffff'
+        ctx.fill()
+      } else {
+        ctx.beginPath()
+        ctx.arc(screenP.x, screenP.y, 4, 0, Math.PI * 2)
+        ctx.fillStyle = '#ffffff'
+        ctx.fill()
+        
+        ctx.strokeStyle = arcPolygon.color
+        ctx.lineWidth = 1.5
+        ctx.stroke()
+      }
+      
+      ctx.fillStyle = isThisVertexHovered ? '#ffff00' : '#ffffff'
+      ctx.font = isThisVertexHovered ? 'bold 11px sans-serif' : '10px sans-serif'
+      ctx.fillText(`${edgeIndex + 1}`, screenP.x + 8, screenP.y - 8)
+    })
+  }
+  
+  return { screenPoints }
+}
+
 // 主绘制函数
 export const drawGeometry = (
   ctx: CanvasRenderingContext2D,
@@ -503,6 +670,10 @@ export const drawGeometry = (
 ): { screenPoints?: Point[] } => {
   switch (geometry.type) {
     case GeometryType.POLYGON:
+      // 检查是否是带拱形的多边形
+      if ('edges' in geometry) {
+        return drawArcPolygon(ctx, geometry as ArcPolygon, viewState, canvasWidth, canvasHeight, isHovered, isSelected, activeHoveredVertex, true, opacity)
+      }
       return drawPolygon(ctx, geometry as Polygon, viewState, canvasWidth, canvasHeight, isHovered, isSelected, activeHoveredVertex, true, opacity)
     case GeometryType.LINE:
       drawLine(ctx, geometry as Line, viewState, canvasWidth, canvasHeight, isHovered, isSelected)
@@ -516,6 +687,106 @@ export const drawGeometry = (
     default:
       return {}
   }
+}
+
+// 计算两点之间的距离
+const getDistance = (p1: Point, p2: Point): number => {
+  return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2))
+}
+
+// 计算垂直法向量（归一化）
+const getPerpendicular = (p1: Point, p2: Point): Point => {
+  const dx = p2.x - p1.x
+  const dy = p2.y - p1.y
+  const length = Math.sqrt(dx * dx + dy * dy)
+  return { x: -dy / length, y: dx / length }
+}
+
+// 计算中点
+const getMiddle = (p1: Point, p2: Point): Point => {
+  return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+}
+
+// 从JSON数据解析多边形边
+export const parsePolygonEdgesFromJSON = (jsonData: Array<{
+  P1: { X: number; Y: number }
+  P2: { X: number; Y: number }
+  ID: string
+  ArchHeight: number
+  IsInnerArc: boolean
+}>): PolygonEdge[] => {
+  return jsonData.map(item => ({
+    p1: { x: item.P1.X, y: item.P1.Y },
+    p2: { x: item.P2.X, y: item.P2.Y },
+    id: item.ID,
+    archHeight: item.ArchHeight,
+    isInnerArc: item.IsInnerArc
+  }))
+}
+
+// 获取拱形边的点集（将C#算法转换为TypeScript）
+export const getArcPoints = (edge: PolygonEdge, arcSubdivisionNum: number = 20): Point[] => {
+  const { p1, p2, archHeight, isInnerArc } = edge
+  const pointList: Point[] = []
+  
+  // 如果拱高为0，直接返回直线段的两个端点
+  if (archHeight === 0) {
+    return [p1, p2]
+  }
+  
+  const length = getDistance(p1, p2)
+  
+  // 计算半径：r = L²/(8h) + h/2
+  const radius = (length * length) / (archHeight * 8) + archHeight / 2
+  
+  // 计算每段弧度：θ = 2 * atan(L/2 / (r-h)) / n
+  let radianPerSeg = 2 * Math.atan2(length / 2, radius - archHeight) / arcSubdivisionNum
+  
+  // 内弧需要反转方向
+  if (isInnerArc) {
+    radianPerSeg *= -1
+  }
+  
+  // 计算法向量（指向外侧）
+  let normal = getPerpendicular(p1, p2)
+  normal = { x: -normal.x, y: -normal.y }
+  
+  // 内弧法线取反
+  if (isInnerArc) {
+    normal = { x: -normal.x, y: -normal.y }
+  }
+  
+  // 计算圆心位置
+  const middle = getMiddle(p1, p2)
+  const center = {
+    x: middle.x + normal.x * (archHeight - radius),
+    y: middle.y + normal.y * (archHeight - radius)
+  }
+  
+  // 生成拱形点集
+  for (let i = 0; i <= arcSubdivisionNum; i++) {
+    const degree = i * radianPerSeg * (180 / Math.PI) // 弧度转角度
+    
+    let rotatedPoint = { ...p1 }
+    
+    if (degree !== 0) {
+      const distance = getDistance(center, p1)
+      
+      // 计算p1相对于圆心的角度
+      const baseAngle = Math.atan2(p1.y - center.y, p1.x - center.x) * (180 / Math.PI)
+      const theta = (baseAngle + degree + 360) % 360
+      
+      // 计算旋转后的点
+      rotatedPoint = {
+        x: center.x + Math.cos(theta * (Math.PI / 180)) * distance,
+        y: center.y + Math.sin(theta * (Math.PI / 180)) * distance
+      }
+    }
+    
+    pointList.push(rotatedPoint)
+  }
+  
+  return pointList
 }
 
 // 清空画布
