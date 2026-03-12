@@ -127,15 +127,3 @@ npm run build
   [{"x": 100, "y": 100}, {"x": 150, "y": 100}, {"x": 150, "y": 150}, {"x": 100, "y": 150}]
 ]
 ```
-
-## 在线演示
-
-访问 [GitHub Pages 演示](https://bryan-zby.github.io/polygon-drawer/) 体验在线版本。
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 许可证
-
-MIT License
