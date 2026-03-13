@@ -587,6 +587,13 @@ const drawAll = () => {
         offsetY = (dx / len) * 30
       }
       
+      // 如果是拱形边，调整长度标签位置，避免与拱高线重叠
+      if (selectedEdge.value.isArc && selectedEdge.value.archHeight && selectedEdge.value.archHeight > 0) {
+        // 将长度标签放在基线的另一侧（与拱高线相反的方向）
+        offsetX = -offsetX
+        offsetY = -offsetY
+      }
+      
       const labelX = midX + offsetX
       const labelY = midY + offsetY
       

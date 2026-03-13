@@ -169,8 +169,8 @@ const parseEdgesToPolygonEdges = (edges: unknown[]): { success: boolean; edges?:
       })
     }
     
-    if (polygonEdges.length < 3) {
-      return { success: false, error: '至少需要3条边才能绘制多边形' }
+    if (polygonEdges.length < 2) {
+      return { success: false, error: '至少需要2条边才能绘制多边形' }
     }
     
     return { success: true, edges: polygonEdges }

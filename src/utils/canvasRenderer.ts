@@ -551,7 +551,7 @@ export const drawArcPolygon = (
   opacity: number = 1
 ): { screenPoints: Point[] } => {
   const { edges } = arcPolygon
-  if (edges.length < 3) return { screenPoints: [] }
+  if (edges.length < 2) return { screenPoints: [] }
   
   // 如果透明度为0，跳过绘制
   if (opacity <= 0) return { screenPoints: [] }

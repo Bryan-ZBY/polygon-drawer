@@ -176,9 +176,7 @@ const handleClear = () => {
       </label>
       <textarea
         v-model="inputText"
-        :placeholder="inputMode === 'edges' 
-          ? '[{\"P1\": {\"X\": 62, \"Y\": -100}, \"P2\": {\"X\": 62, \"Y\": -76}, \"ArchHeight\": 8.3, \"IsInnerArc\": true}]' 
-          : '[{\"x\": 100, \"y\": 100}, {\"x\": 200, \"y\": 100}, {\"x\": 150, \"y\": 200}]'"
+        placeholder="粘贴多边形数据 (自动识别点集/边集格式)"
         rows="6"
         class="glass-input"
       ></textarea>
