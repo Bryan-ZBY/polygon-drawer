@@ -12,6 +12,7 @@ import type {
   ArcPolygon
 } from '@/types'
 import { GeometryType } from '@/types'
+import { pointToSegmentDistance } from './geometry'
 
 // 颜色转换
 export const hexToRgba = (hex: string, alpha: number): string => {
@@ -694,6 +695,24 @@ const getDistance = (p1: Point, p2: Point): number => {
   return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2))
 }
 
+// 计算向量 (p2 - p1)
+const getVector = (p1: Point, p2: Point): Point => {
+  return { x: p2.x - p1.x, y: p2.y - p1.y }
+}
+
+// 向量顺时针旋转90度（垂直向量）
+// 相当于 C# 中的: new Vector2(vector.Y, -vector.X)
+const perpendicular = (vector: Point): Point => {
+  return { x: vector.y, y: -vector.x }
+}
+
+// 计算边的垂直向量（p2 - p1 顺时针旋转90度）
+// 相当于 C# 中的: (this.P2 - this.P1).Perpendicular()
+const getEdgePerpendicular = (p1: Point, p2: Point): Point => {
+  const vector = getVector(p1, p2)
+  return perpendicular(vector)
+}
+
 // 计算垂直法向量（归一化）
 const getPerpendicular = (p1: Point, p2: Point): Point => {
   const dx = p2.x - p1.x
@@ -705,6 +724,40 @@ const getPerpendicular = (p1: Point, p2: Point): Point => {
 // 计算中点
 const getMiddle = (p1: Point, p2: Point): Point => {
   return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+}
+
+// 计算点到拱形弧线的最小距离
+export const pointToArcDistance = (
+  point: Point,
+  edge: PolygonEdge,
+  arcSubdivisionNum: number = 20
+): { distance: number; closestPoint: Point } => {
+  const { p1, p2, archHeight } = edge
+  
+  // 如果拱高为0，使用直线段距离
+  if (archHeight === 0) {
+    return pointToSegmentDistance(point, p1, p2)
+  }
+  
+  // 获取拱形点集
+  const arcPoints = getArcPoints(edge, arcSubdivisionNum)
+  
+  let minDistance = Infinity
+  let closestPoint = p1
+  
+  // 检查拱形上的每个线段
+  for (let i = 0; i < arcPoints.length - 1; i++) {
+    const a = arcPoints[i]
+    const b = arcPoints[i + 1]
+    const { distance, closestPoint: cp } = pointToSegmentDistance(point, a, b)
+    
+    if (distance < minDistance) {
+      minDistance = distance
+      closestPoint = cp
+    }
+  }
+  
+  return { distance: minDistance, closestPoint }
 }
 
 // 从JSON数据解析多边形边
@@ -747,16 +800,25 @@ export const getArcPoints = (edge: PolygonEdge, arcSubdivisionNum: number = 20):
     radianPerSeg *= -1
   }
   
-  // 计算法向量（指向外侧）
-  let normal = getPerpendicular(p1, p2)
+  // 计算法向量（垂直于边，指向外侧 - 顺时针90度）
+  // C#: Perpendicular => new Vector2(vector.Y, -vector.X)
+  const edgeVector = { x: p2.x - p1.x, y: p2.y - p1.y }
+  let normal = { x: edgeVector.y, y: -edgeVector.x }
+  
+  // 归一化法向量
+  const normalLength = Math.sqrt(normal.x * normal.x + normal.y * normal.y)
+  normal = { x: normal.x / normalLength, y: normal.y / normalLength }
+  
+  // 注意：C#代码中是 -this.Perpendicular.Normalized()，所以这里要取反
   normal = { x: -normal.x, y: -normal.y }
   
-  // 内弧法线取反
+  // 内弧法线取反（指向内侧）
   if (isInnerArc) {
     normal = { x: -normal.x, y: -normal.y }
   }
   
   // 计算圆心位置
+  // C#: around = this.Middle + normal * (this.ArchHeight - radius)
   const middle = getMiddle(p1, p2)
   const center = {
     x: middle.x + normal.x * (archHeight - radius),
@@ -772,14 +834,15 @@ export const getArcPoints = (edge: PolygonEdge, arcSubdivisionNum: number = 20):
     if (degree !== 0) {
       const distance = getDistance(center, p1)
       
-      // 计算p1相对于圆心的角度
-      const baseAngle = Math.atan2(p1.y - center.y, p1.x - center.x) * (180 / Math.PI)
+      // C#: Atan2(point.X - around.X, point.Y - around.Y) - 注意参数顺序是 (x, y)
+      const baseAngle = Math.atan2(p1.x - center.x, p1.y - center.y) * (180 / Math.PI)
       const theta = (baseAngle + degree + 360) % 360
       
-      // 计算旋转后的点
+      // C#: rotatedX = around.X + Sin(theta) * distance
+      //     rotatedY = around.Y + Cos(theta) * distance
       rotatedPoint = {
-        x: center.x + Math.cos(theta * (Math.PI / 180)) * distance,
-        y: center.y + Math.sin(theta * (Math.PI / 180)) * distance
+        x: center.x + Math.sin(theta * (Math.PI / 180)) * distance,
+        y: center.y + Math.cos(theta * (Math.PI / 180)) * distance
       }
     }
     

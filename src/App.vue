@@ -10,7 +10,8 @@ import {
   calculatePolygonArea,
   calculatePolygonPerimeter,
   isPointInPolygon,
-  getArcPoints
+  getArcPoints,
+  pointToArcDistance
 } from '@/utils/canvasRenderer'
 import { generateNonOverlappingPolygon } from '@/utils/geometryGenerator'
 import { calculateBoundingBox } from '@/utils/geometry'
@@ -22,7 +23,7 @@ import GuideOverlay from '@/components/GuideOverlay.vue'
 // 状态
 const geometries = ref<Geometry[]>([])
 const selectedId = ref<string | null>(null)
-const selectedEdge = ref<{ polygonId: string; edgeIndex: number; start: Point; end: Point } | null>(null)
+const selectedEdge = ref<{ polygonId: string; edgeIndex: number; start: Point; end: Point; isArc?: boolean; archHeight?: number; isInnerArc?: boolean } | null>(null)
 const hoveredId = ref<string | null>(null)
 const errorMsg = ref('')
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -463,17 +464,95 @@ const drawAll = () => {
       const start = worldToScreen(selectedEdge.value.start)
       const end = worldToScreen(selectedEdge.value.end)
       
-      // 绘制高亮边（粉色发光效果）
-      ctx.strokeStyle = '#ff69b4'
-      ctx.lineWidth = 4
-      ctx.lineCap = 'round'
-      ctx.shadowColor = '#ff69b4'
-      ctx.shadowBlur = 15
-      ctx.beginPath()
-      ctx.moveTo(start.x, start.y)
-      ctx.lineTo(end.x, end.y)
-      ctx.stroke()
-      ctx.shadowBlur = 0
+      // 如果是拱形边，绘制虚线基线、实线弧线和黄色拱高线
+      if (selectedEdge.value.isArc && selectedEdge.value.archHeight && selectedEdge.value.archHeight > 0) {
+        const edge: PolygonEdge = {
+          p1: selectedEdge.value.start,
+          p2: selectedEdge.value.end,
+          id: 'selected',
+          archHeight: selectedEdge.value.archHeight,
+          isInnerArc: selectedEdge.value.isInnerArc || false
+        }
+        const arcPoints = getArcPoints(edge)
+        
+        // 1. 绘制 P1 到 P2 的虚线（基线）
+        ctx.strokeStyle = '#ff69b4'
+        ctx.lineWidth = 2
+        ctx.lineCap = 'round'
+        ctx.setLineDash([8, 4])
+        ctx.beginPath()
+        ctx.moveTo(start.x, start.y)
+        ctx.lineTo(end.x, end.y)
+        ctx.stroke()
+        ctx.setLineDash([])
+        
+        // 2. 绘制实线弧线（高亮）
+        ctx.strokeStyle = '#ff69b4'
+        ctx.lineWidth = 4
+        ctx.lineCap = 'round'
+        ctx.shadowColor = '#ff69b4'
+        ctx.shadowBlur = 15
+        ctx.beginPath()
+        const firstScreenPoint = worldToScreen(arcPoints[0])
+        ctx.moveTo(firstScreenPoint.x, firstScreenPoint.y)
+        for (let i = 1; i < arcPoints.length; i++) {
+          const screenPoint = worldToScreen(arcPoints[i])
+          ctx.lineTo(screenPoint.x, screenPoint.y)
+        }
+        ctx.stroke()
+        ctx.shadowBlur = 0
+        
+        // 3. 绘制黄色虚线拱高线
+        const midPoint = {
+          x: (selectedEdge.value.start.x + selectedEdge.value.end.x) / 2,
+          y: (selectedEdge.value.start.y + selectedEdge.value.end.y) / 2
+        }
+        // 找到拱形点集中距离基线最远的点（拱形最高点）
+        let highestPoint = arcPoints[0]
+        let maxDistFromBase = 0
+        for (const point of arcPoints) {
+          // 计算点到直线段的距离
+          const { distance } = pointToSegmentDistance(point, selectedEdge.value.start, selectedEdge.value.end)
+          if (distance > maxDistFromBase) {
+            maxDistFromBase = distance
+            highestPoint = point
+          }
+        }
+        
+        const midScreen = worldToScreen(midPoint)
+        const highestScreen = worldToScreen(highestPoint)
+        
+        ctx.strokeStyle = '#ffff00' // 黄色
+        ctx.lineWidth = 2
+        ctx.setLineDash([5, 5])
+        ctx.beginPath()
+        ctx.moveTo(midScreen.x, midScreen.y)
+        ctx.lineTo(highestScreen.x, highestScreen.y)
+        ctx.stroke()
+        ctx.setLineDash([])
+        
+        // 绘制拱高数值
+        ctx.font = 'bold 12px "JetBrains Mono", monospace'
+        ctx.fillStyle = '#ffff00' // 黄色
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        const archHeightLabel = selectedEdge.value.archHeight.toFixed(2)
+        const labelMidX = (midScreen.x + highestScreen.x) / 2
+        const labelMidY = (midScreen.y + highestScreen.y) / 2
+        ctx.fillText(`h=${archHeightLabel}`, labelMidX + 15, labelMidY - 10)
+      } else {
+        // 普通边：绘制高亮边（粉色发光效果）
+        ctx.strokeStyle = '#ff69b4'
+        ctx.lineWidth = 4
+        ctx.lineCap = 'round'
+        ctx.shadowColor = '#ff69b4'
+        ctx.shadowBlur = 15
+        ctx.beginPath()
+        ctx.moveTo(start.x, start.y)
+        ctx.lineTo(end.x, end.y)
+        ctx.stroke()
+        ctx.shadowBlur = 0
+      }
       
       // 绘制边端点
       ctx.fillStyle = '#ff69b4'
@@ -1022,10 +1101,11 @@ const detectPolygonClick = (worldPos: Point): { polygon: Polygon; edgeIndex?: nu
       if ('edges' in geometry) {
         const arcPolygon = geometry as ArcPolygon
         
-        // 先检测是否点击了边
+        // 先检测是否点击了边（包括拱形弧线）
         for (let j = 0; j < arcPolygon.edges.length; j++) {
           const edge = arcPolygon.edges[j]
-          const { distance } = pointToSegmentDistance(worldPos, edge.p1, edge.p2)
+          // 使用 pointToArcDistance 检测拱形弧线
+          const { distance } = pointToArcDistance(worldPos, edge)
 
           if (distance < CLICK_THRESHOLD) {
             return { polygon: arcPolygon as unknown as Polygon, edgeIndex: j }
@@ -1300,10 +1380,11 @@ const detectSnap = (worldPos: Point): {
       } else if (geometry.type === 'polygon') {
         // 检查是否是带拱形的多边形
         if ('edges' in geometry) {
-          // ArcPolygon - 使用 edges 的线段
+          // ArcPolygon - 使用拱形弧线
           const arcPolygon = geometry as ArcPolygon
           for (const edge of arcPolygon.edges) {
-            const { distance, closestPoint } = pointToSegmentDistance(worldPos, edge.p1, edge.p2)
+            // 使用 pointToArcDistance 检测拱形弧线
+            const { distance, closestPoint } = pointToArcDistance(worldPos, edge)
             const screenDist = distance * viewState.value.scale
 
             if (screenDist < EDGE_SNAP_THRESHOLD && screenDist < edgeMinDist) {
@@ -1792,12 +1873,33 @@ const handleMouseDown = (e: MouseEvent) => {
     // 双击或Ctrl+左键点击边：以边上最近点为起点开始新测距
     if ((isDoubleClick || e.ctrlKey) && clickedPolygonResult?.edgeIndex !== undefined && !isMeasuring.value) {
       const { polygon, edgeIndex } = clickedPolygonResult
-      const points = polygon.points
-      const edgeStart = points[edgeIndex]
-      const edgeEnd = points[(edgeIndex + 1) % points.length]
+      
+      // 检查是否是带拱形的多边形
+      let edgeStart: Point, edgeEnd: Point
+      if ('edges' in polygon) {
+        const arcPolygon = polygon as ArcPolygon
+        const edge = arcPolygon.edges[edgeIndex]
+        edgeStart = edge.p1
+        edgeEnd = edge.p2
+      } else {
+        const points = polygon.points
+        edgeStart = points[edgeIndex]
+        edgeEnd = points[(edgeIndex + 1) % points.length]
+      }
       
       // 计算边上离点击位置最近的点
-      const { closestPoint } = pointToSegmentDistance(worldPos, edgeStart, edgeEnd)
+      let closestPoint: Point
+      if ('edges' in polygon) {
+        const arcPolygon = polygon as ArcPolygon
+        const edge = arcPolygon.edges[edgeIndex]
+        // 对于拱形边，使用 pointToArcDistance 计算弧线上的最近点
+        const result = pointToArcDistance(worldPos, edge)
+        closestPoint = result.closestPoint
+      } else {
+        // 对于普通边，使用 pointToSegmentDistance 计算直线段上的最近点
+        const result = pointToSegmentDistance(worldPos, edgeStart, edgeEnd)
+        closestPoint = result.closestPoint
+      }
       
       ignoreNextClick.value = true
       selectedMeasurementId.value = null
@@ -1812,11 +1914,26 @@ const handleMouseDown = (e: MouseEvent) => {
       
       // 同时选中这条边
       selectedId.value = polygon.id
-      selectedEdge.value = {
-        polygonId: polygon.id,
-        edgeIndex,
-        start: edgeStart,
-        end: edgeEnd
+      if ('edges' in polygon) {
+        const arcPolygon = polygon as ArcPolygon
+        const edge = arcPolygon.edges[edgeIndex]
+        selectedEdge.value = {
+          polygonId: polygon.id,
+          edgeIndex,
+          start: edgeStart,
+          end: edgeEnd,
+          isArc: edge.archHeight > 0,
+          archHeight: edge.archHeight,
+          isInnerArc: edge.isInnerArc
+        }
+      } else {
+        selectedEdge.value = {
+          polygonId: polygon.id,
+          edgeIndex,
+          start: edgeStart,
+          end: edgeEnd,
+          isArc: false
+        }
       }
       
       scheduleDraw()
@@ -1855,12 +1972,28 @@ const handleMouseDown = (e: MouseEvent) => {
       
       // 如果点击了边，设置选中边状态
       if (edgeIndex !== undefined) {
-        const points = polygon.points
-        selectedEdge.value = {
-          polygonId: polygon.id,
-          edgeIndex,
-          start: points[edgeIndex],
-          end: points[(edgeIndex + 1) % points.length]
+        // 检查是否是带拱形的多边形
+        if ('edges' in polygon) {
+          const arcPolygon = polygon as ArcPolygon
+          const edge = arcPolygon.edges[edgeIndex]
+          selectedEdge.value = {
+            polygonId: polygon.id,
+            edgeIndex,
+            start: edge.p1,
+            end: edge.p2,
+            isArc: edge.archHeight > 0,
+            archHeight: edge.archHeight,
+            isInnerArc: edge.isInnerArc
+          }
+        } else {
+          const points = polygon.points
+          selectedEdge.value = {
+            polygonId: polygon.id,
+            edgeIndex,
+            start: points[edgeIndex],
+            end: points[(edgeIndex + 1) % points.length],
+            isArc: false
+          }
         }
       } else {
         selectedEdge.value = null
@@ -2919,6 +3052,8 @@ onUnmounted(() => {
       <div v-if="selectedEdge" class="info-item edge-info">
         <span class="info-label">边 {{ selectedEdge.edgeIndex + 1 }}</span>
         <span class="info-value">长度: {{ calculateDistance(selectedEdge.start, selectedEdge.end).toFixed(2) }}</span>
+        <span v-if="selectedEdge.isArc" class="info-value" style="color: #ffff00;">拱高: {{ selectedEdge.archHeight?.toFixed(2) }}</span>
+        <span v-if="selectedEdge.isArc" class="info-value" style="color: #00ffff;">{{ selectedEdge.isInnerArc ? '内弧' : '外弧' }}</span>
         <span class="info-value">起点: ({{ selectedEdge.start.x.toFixed(1) }}, {{ selectedEdge.start.y.toFixed(1) }})</span>
         <span class="info-value">终点: ({{ selectedEdge.end.x.toFixed(1) }}, {{ selectedEdge.end.y.toFixed(1) }})</span>
       </div>
