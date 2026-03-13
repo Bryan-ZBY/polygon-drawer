@@ -1965,8 +1965,11 @@ const handleMouseDown = (e: MouseEvent) => {
       const { polygon, edgeIndex } = clickedPolygonResult
       selectedId.value = polygon.id
       
-      // 显示聚焦按钮
-      showFocusButton(polygon.id, e.clientX, e.clientY)
+      // 如果点击的是边，不显示聚焦按钮
+      if (edgeIndex === undefined) {
+        // 显示聚焦按钮
+        showFocusButton(polygon.id, e.clientX, e.clientY)
+      }
       
       // 不自动清空测距线选中状态，让用户可以同时查看多边形/边和测距线信息
       
@@ -2273,6 +2276,43 @@ const addArcPolygon = (edges: PolygonEdge[]) => {
     scheduleDraw()
     setTimeout(() => {
       fitViewToGeometry(newArcPolygon, true)
+    }, 100)
+  } else {
+    saveToHistory() // 保存历史记录
+    scheduleDraw()
+  }
+}
+
+// 添加拱形多边形组
+const addArcPolygonGroup = (polygons: PolygonEdge[][]) => {
+  errorMsg.value = ''
+
+  const groupPolygons: ArcPolygon[] = []
+  
+  for (let i = 0; i < polygons.length; i++) {
+    const edges = polygons[i]
+    const newArcPolygon: ArcPolygon = {
+      id: generateId(),
+      name: `拱形多边形 ${geometries.value.length + 1}-${i + 1}`,
+      type: GeometryType.POLYGON,
+      edges,
+      visible: true,
+      color: getNextColor()
+    }
+    groupPolygons.push(newArcPolygon)
+    geometries.value.push(newArcPolygon)
+  }
+
+  // 选中第一个多边形
+  if (groupPolygons.length > 0) {
+    selectedId.value = groupPolygons[0].id
+  }
+  
+  // 如果是第一个图形，先显示0.1秒再自适应缩放
+  if (geometries.value.length === polygons.length) {
+    scheduleDraw()
+    setTimeout(() => {
+      fitViewToAll()
     }, 100)
   } else {
     saveToHistory() // 保存历史记录
@@ -2881,6 +2921,7 @@ onUnmounted(() => {
           @add="addGeometry"
           @add-group="addPolygonGroup"
           @add-arc-polygon="addArcPolygon"
+          @add-arc-polygon-group="addArcPolygonGroup"
           @generate-random="generateRandomTestPolygon"
           @print-geometries="printGeometries"
           :geometries-count="geometries.length"

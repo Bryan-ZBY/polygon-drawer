@@ -730,7 +730,7 @@ const getMiddle = (p1: Point, p2: Point): Point => {
 export const pointToArcDistance = (
   point: Point,
   edge: PolygonEdge,
-  arcSubdivisionNum: number = 20
+  arcSubdivisionNum: number = 50
 ): { distance: number; closestPoint: Point } => {
   const { p1, p2, archHeight } = edge
   
@@ -778,7 +778,7 @@ export const parsePolygonEdgesFromJSON = (jsonData: Array<{
 }
 
 // 获取拱形边的点集（将C#算法转换为TypeScript）
-export const getArcPoints = (edge: PolygonEdge, arcSubdivisionNum: number = 20): Point[] => {
+export const getArcPoints = (edge: PolygonEdge, arcSubdivisionNum: number = 50): Point[] => {
   const { p1, p2, archHeight, isInnerArc } = edge
   const pointList: Point[] = []
   

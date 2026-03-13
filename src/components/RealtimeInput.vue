@@ -14,6 +14,7 @@ const emit = defineEmits<{
   add: [geometry: Omit<Geometry, 'id' | 'name' | 'color'>, isRealtime: boolean, originalData?: unknown]
   addGroup: [group: Omit<PolygonGroup, 'id' | 'name' | 'color'>, originalData?: unknown[]]
   addArcPolygon: [edges: PolygonEdge[]]
+  addArcPolygonGroup: [polygons: PolygonEdge[][]]
   generateRandom: []
   printGeometries: []
 }>()
@@ -169,6 +170,36 @@ const parseEdgesToPolygonEdges = (edges: unknown[]): { success: boolean; edges?:
     return { success: true, edges: polygonEdges }
   } catch (e) {
     return { success: false, error: '边数据解析错误' }
+  }
+}
+
+// 解析拱形多边形组（嵌套数组格式）
+const parseArcPolygonGroup = (data: unknown[]): { success: boolean; polygons?: PolygonEdge[][]; error?: string } => {
+  try {
+    const polygons: PolygonEdge[][] = []
+    
+    for (let i = 0; i < data.length; i++) {
+      const polygonData = data[i] as unknown[]
+      
+      if (!Array.isArray(polygonData)) {
+        return { success: false, error: `第 ${i + 1} 个多边形必须是数组格式` }
+      }
+      
+      const result = parseEdgesToPolygonEdges(polygonData)
+      if (!result.success || !result.edges) {
+        return { success: false, error: `第 ${i + 1} 个多边形解析失败: ${result.error}` }
+      }
+      
+      polygons.push(result.edges)
+    }
+    
+    if (polygons.length === 0) {
+      return { success: false, error: '至少需要1个多边形' }
+    }
+    
+    return { success: true, polygons }
+  } catch (e) {
+    return { success: false, error: '拱形多边形组解析错误' }
   }
 }
 
@@ -451,6 +482,43 @@ const processInput = () => {
         return
       }
       
+      // 检查是否是嵌套数组（多边形组格式）
+      if (data.length > 0 && Array.isArray(data[0])) {
+        // 检查是否是拱形多边形组（子数组包含 ArchHeight 或 IsInnerArc 属性）
+        const hasArcProperties = data[0].length > 0 && data[0][0] && (
+          data[0][0].ArchHeight !== undefined || data[0][0].archHeight !== undefined ||
+          data[0][0].IsInnerArc !== undefined || data[0][0].isInnerArc !== undefined
+        )
+        
+        if (hasArcProperties || inputMode.value === 'edges') {
+          // 解析为拱形多边形组
+          const result = parseArcPolygonGroup(data)
+          if (result.success && result.polygons) {
+            isValid.value = true
+            is3DMode.value = false
+            emit('addArcPolygonGroup', result.polygons)
+            inputText.value = ''
+          } else {
+            isValid.value = false
+            localError.value = result.error || '拱形多边形组解析失败'
+          }
+          return
+        }
+        
+        // 是普通多边形组格式
+        const result = parsePolygonGroup(data)
+        if (result.success && result.group) {
+          isValid.value = true
+          is3DMode.value = false
+          emit('addGroup', result.group, data)
+          inputText.value = ''
+        } else {
+          isValid.value = false
+          localError.value = result.error || ''
+        }
+        return
+      }
+      
       // 检查是否是边集模式（包含 ArchHeight 或 IsInnerArc 属性）
       const hasArcProperties = data.length > 0 && data[0] && (
         data[0].ArchHeight !== undefined || data[0].archHeight !== undefined ||
@@ -468,21 +536,6 @@ const processInput = () => {
         } else {
           isValid.value = false
           localError.value = result.error || '边数据解析失败'
-        }
-        return
-      }
-      
-      if (data.length > 0 && Array.isArray(data[0])) {
-        // 是多边形组格式
-        const result = parsePolygonGroup(data)
-        if (result.success && result.group) {
-          isValid.value = true
-          is3DMode.value = false
-          emit('addGroup', result.group, data)
-          inputText.value = ''
-        } else {
-          isValid.value = false
-          localError.value = result.error || ''
         }
         return
       }
