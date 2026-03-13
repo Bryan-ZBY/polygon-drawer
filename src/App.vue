@@ -2182,6 +2182,21 @@ const handleKeyDown = (e: KeyboardEvent) => {
     e.preventDefault()
     redo()
   }
+  // Delete 键删除选中的图形或测距线
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    // 如果有选中的测距线，删除测距线
+    if (selectedMeasurementId.value) {
+      e.preventDefault()
+      deleteMeasurement(selectedMeasurementId.value)
+      return
+    }
+    // 如果有选中的图形，删除图形
+    if (selectedId.value) {
+      e.preventDefault()
+      deleteGeometry(selectedId.value)
+      return
+    }
+  }
 }
 
 // 添加图形
@@ -2578,7 +2593,7 @@ const fitViewToAll = () => {
   const padding = 0.8
   const scaleX = (canvas.width * padding) / width
   const scaleY = (canvas.height * padding) / height
-  const targetScale = Math.max(0.1, Math.min(100, Math.min(scaleX, scaleY)))
+  const targetScale = Math.max(0.1, Math.min(500, Math.min(scaleX, scaleY)))
   const targetOffsetX = -centerX * targetScale
   const targetOffsetY = centerY * targetScale
   
@@ -2590,7 +2605,23 @@ const fitViewToAll = () => {
 const fitViewToSelected = () => {
   if (!selectedId.value) return
   
-  const geometry = geometries.value.find(g => g.id === selectedId.value)
+  // 先在顶层 geometries 中查找
+  let geometry = geometries.value.find(g => g.id === selectedId.value)
+  
+  // 如果没找到，在多边形组中查找
+  if (!geometry) {
+    for (const g of geometries.value) {
+      if (g.type === 'group') {
+        const group = g as PolygonGroup
+        const polygon = group.polygons.find(p => p.id === selectedId.value)
+        if (polygon) {
+          geometry = polygon
+          break
+        }
+      }
+    }
+  }
+  
   if (!geometry) return
   
   fitViewToGeometry(geometry, true) // true 表示使用动画
@@ -2654,7 +2685,7 @@ const fitViewToGeometry = (geometry: Geometry, animate: boolean = false) => {
   }
 
   // 限制缩放范围
-  scale = Math.max(0.1, Math.min(100, scale))
+  scale = Math.max(0.1, Math.min(500, scale))
 
   // 计算偏移量，使图形居中显示在屏幕中间
   const targetOffsetX = -centerX * scale
@@ -2859,7 +2890,7 @@ const handleWheel = (e: WheelEvent) => {
   const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1
   const newScale = viewState.value.scale * scaleFactor
 
-  if (newScale < 0.1 || newScale > 100) return
+  if (newScale < 0.1 || newScale > 1000) return
 
   // 获取鼠标在画布上的位置
   const rect = canvas.getBoundingClientRect()

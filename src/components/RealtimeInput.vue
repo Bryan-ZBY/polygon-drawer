@@ -24,7 +24,7 @@ const localError = ref('')
 const isValid = ref(false)
 const is3DMode = ref(false)
 const isProcessing = ref(false)
-const inputMode = ref<'points' | 'edges'>('points')
+const inputMode = ref<'points' | 'edges'>('points') // 自动识别，保留用于样式
 
 // 常量配置
 const MAX_POINTS = 10000 // 最大点数限制
@@ -490,13 +490,23 @@ const processInput = () => {
       
       // 检查是否是嵌套数组（多边形组格式）
       if (data.length > 0 && Array.isArray(data[0])) {
-        // 检查是否是拱形多边形组（子数组包含 ArchHeight 或 IsInnerArc 属性）
-        const hasArcProperties = data[0].length > 0 && data[0][0] && (
-          data[0][0].ArchHeight !== undefined || data[0][0].archHeight !== undefined ||
-          data[0][0].IsInnerArc !== undefined || data[0][0].isInnerArc !== undefined
+        // 检查是否是拱形多边形组（检查所有多边形的所有边是否有 ArchHeight 或 IsInnerArc 属性）
+        const hasArcProperties = data.some((polygon: any) => 
+          Array.isArray(polygon) && polygon.some((edge: any) => 
+            edge && (
+              edge.ArchHeight !== undefined || edge.archHeight !== undefined ||
+              edge.IsInnerArc !== undefined || edge.isInnerArc !== undefined
+            )
+          )
         )
         
-        if (hasArcProperties || inputMode.value === 'edges') {
+        // 检查是否是边数据格式（包含 P1, P2 属性）
+        const hasEdgeFormat = data.some((polygon: any) => 
+          Array.isArray(polygon) && polygon.length > 0 && polygon[0] && 
+          (polygon[0].P1 || polygon[0].p1) && (polygon[0].P2 || polygon[0].p2)
+        )
+        
+        if (hasArcProperties || hasEdgeFormat || inputMode.value === 'edges') {
           // 解析为拱形多边形组
           const result = parseArcPolygonGroup(data)
           if (result.success && result.polygons) {
@@ -607,28 +617,10 @@ watch(inputText, () => {
 
 <template>
   <div class="realtime-input">
-    <div class="input-mode-tabs">
-      <button 
-        class="mode-tab" 
-        :class="{ active: inputMode === 'points' }"
-        @click="inputMode = 'points'"
-      >
-        点集模式
-      </button>
-      <button 
-        class="mode-tab" 
-        :class="{ active: inputMode === 'edges' }"
-        @click="inputMode = 'edges'"
-      >
-        边集模式 (拱形)
-      </button>
-    </div>
     <div class="input-row">
       <input
         v-model="inputText"
-        :placeholder="inputMode === 'edges' 
-          ? '📋 粘贴边集数据 (支持 ArchHeight/IsInnerArc)' 
-          : '📋 粘贴多边形数据 (JSON格式)'"
+        placeholder="📋 粘贴多边形数据 (自动识别点集/边集格式)"
         class="glass-input"
         :class="{ valid: isValid, invalid: localError, 'mode-3d': is3DMode, processing: isProcessing, 'mode-edges': inputMode === 'edges' }"
         :disabled="isProcessing"
@@ -657,35 +649,6 @@ watch(inputText, () => {
 <style scoped>
 .realtime-input {
   width: 100%;
-}
-
-.input-mode-tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.mode-tab {
-  flex: 1;
-  padding: 6px 10px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.6);
-  cursor: pointer;
-  transition: all 0.3s ease;
-}
-
-.mode-tab:hover {
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.mode-tab.active {
-  background: rgba(0, 245, 255, 0.15);
-  border-color: rgba(0, 245, 255, 0.4);
-  color: #00f5ff;
 }
 
 .input-row {
