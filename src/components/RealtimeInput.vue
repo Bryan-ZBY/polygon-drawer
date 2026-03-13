@@ -88,12 +88,18 @@ const parsePolygon = (input: string): ParseResult<Polygon> => {
       return parseEdgesFormat(data)
     }
     
-    const points = data.filter(p => 
-      typeof p.x === 'number' && typeof p.y === 'number'
-    )
+    // 支持大小写属性名 (x/y 或 X/Y)
+    const points = data.filter(p => {
+      const x = typeof p.X === 'number' ? p.X : p.x
+      const y = typeof p.Y === 'number' ? p.Y : p.y
+      return typeof x === 'number' && typeof y === 'number'
+    }).map(p => ({
+      x: typeof p.X === 'number' ? p.X : p.x,
+      y: typeof p.Y === 'number' ? p.Y : p.y
+    }))
     
     if (points.length !== data.length) {
-      return { success: false, error: '所有点必须包含 x 和 y 数字属性' }
+      return { success: false, error: '所有点必须包含 x/y 或 X/Y 数字属性' }
     }
     
     if (points.length < 3) {

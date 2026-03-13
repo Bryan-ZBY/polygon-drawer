@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import type { Geometry, Polygon, PolygonGroup, ViewState, Point, PolygonEdge, ArcPolygon } from '@/types'
 import { generateId, getNextColor, GeometryType } from '@/types'
 import { 
@@ -425,7 +425,9 @@ const drawAll = () => {
             const isHovered = hoveredId.value === polygon.id
             const isSelected = selectedId.value === polygon.id || (group.collapsed && selectedId.value === group.id)
             const activeVertex = hoveredVertex.value || lastHoveredVertex.value
-            drawGeometry(ctx, polygon, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex, opacity)
+            // 使用多边形自身的透明度（如果有动画）乘以组的透明度
+            const polygonOpacity = polygon.opacity !== undefined ? polygon.opacity : 1
+            drawGeometry(ctx, polygon, viewState.value, canvas.width, canvas.height, isHovered, isSelected, activeVertex, polygonOpacity * opacity)
           }
         })
       } else {
@@ -1849,6 +1851,9 @@ const handleMouseDown = (e: MouseEvent) => {
       ignoreNextClick.value = true
       selectedMeasurementId.value = null
       measurementDeleteBtnPos.value = null
+      
+      // 隐藏聚焦按钮
+      hideFocusButton()
 
       // 以测距线上离点击位置最近的点作为测距起点
       isMeasuring.value = true
@@ -1905,6 +1910,9 @@ const handleMouseDown = (e: MouseEvent) => {
       selectedMeasurementId.value = null
       measurementDeleteBtnPos.value = null
       
+      // 隐藏聚焦按钮
+      hideFocusButton()
+      
       // 以边上最近点作为测距起点
       isMeasuring.value = true
       isMeasurePending.value = false
@@ -1945,6 +1953,9 @@ const handleMouseDown = (e: MouseEvent) => {
       ignoreNextClick.value = true
       selectedMeasurementId.value = null
       measurementDeleteBtnPos.value = null
+      
+      // 隐藏聚焦按钮
+      hideFocusButton()
       
       // 检测吸附
       const snap = detectSnap(worldPos)
@@ -2385,36 +2396,36 @@ const deleteGeometry = (id: string) => {
 // 切换可见性（带动画）
 const toggleVisibility = (geometry: Geometry) => {
   const isShowing = !geometry.visible
-  
-  // 如果是显示，立即设置 visible 为 true
-  if (isShowing) {
-    geometry.visible = true
-  }
-  
+
   // 初始化透明度
   if (geometry.opacity === undefined) {
     geometry.opacity = isShowing ? 0 : 1
   }
-  
+
+  // 如果是显示，立即设置 visible 为 true，然后开始淡入动画
+  if (isShowing) {
+    geometry.visible = true
+  }
+
   // 动画目标值
   const targetOpacity = isShowing ? 1 : 0
   const startOpacity = geometry.opacity
   const startTime = performance.now()
-  const duration = 500 // 0.5秒动画
-  
+  const duration = 300 // 0.3秒动画
+
   // 使用 easeInOutCubic 缓动函数
   const easeInOutCubic = (t: number): number => {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
   }
-  
+
   const animate = (currentTime: number) => {
     const elapsed = currentTime - startTime
     const progress = Math.min(elapsed / duration, 1)
     const easedProgress = easeInOutCubic(progress)
-    
+
     geometry.opacity = startOpacity + (targetOpacity - startOpacity) * easedProgress
     scheduleDraw()
-    
+
     if (progress < 1) {
       requestAnimationFrame(animate)
     } else {
@@ -2422,9 +2433,13 @@ const toggleVisibility = (geometry: Geometry) => {
       if (!isShowing) {
         geometry.visible = false
       }
+      // 动画结束后再重绘一次确保状态正确
+      scheduleDraw()
     }
   }
-  
+
+  // 立即重绘一次，确保动画开始前就有正确的显示
+  scheduleDraw()
   requestAnimationFrame(animate)
 }
 
@@ -2870,6 +2885,9 @@ const handleWheel = (e: WheelEvent) => {
 // 禁用右键默认菜单
 const handleContextMenu = (e: MouseEvent) => {
   e.preventDefault()
+  
+  // 隐藏聚焦按钮
+  hideFocusButton()
 }
 
 onMounted(() => {

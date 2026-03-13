@@ -730,7 +730,7 @@ const getMiddle = (p1: Point, p2: Point): Point => {
 export const pointToArcDistance = (
   point: Point,
   edge: PolygonEdge,
-  arcSubdivisionNum: number = 50
+  arcSubdivisionNum: number = 20
 ): { distance: number; closestPoint: Point } => {
   const { p1, p2, archHeight } = edge
   
@@ -739,11 +739,21 @@ export const pointToArcDistance = (
     return pointToSegmentDistance(point, p1, p2)
   }
   
-  // 获取拱形点集
+  // 快速预检查：先计算点到直线段的距离
+  // 如果距离很远，直接返回直线段距离（拱形弧线不会比直线段更近）
+  const { distance: lineDist, closestPoint: lineClosestPoint } = pointToSegmentDistance(point, p1, p2)
+  
+  // 如果点到直线段的距离大于拱高的2倍，拱形弧线不会比直线段更近
+  // 这是一个快速排除的启发式优化
+  if (lineDist > Math.abs(archHeight) * 2) {
+    return { distance: lineDist, closestPoint: lineClosestPoint }
+  }
+  
+  // 获取拱形点集（使用较少的细分点以提高性能）
   const arcPoints = getArcPoints(edge, arcSubdivisionNum)
   
-  let minDistance = Infinity
-  let closestPoint = p1
+  let minDistance = lineDist
+  let closestPoint = lineClosestPoint
   
   // 检查拱形上的每个线段
   for (let i = 0; i < arcPoints.length - 1; i++) {
@@ -778,7 +788,7 @@ export const parsePolygonEdgesFromJSON = (jsonData: Array<{
 }
 
 // 获取拱形边的点集（将C#算法转换为TypeScript）
-export const getArcPoints = (edge: PolygonEdge, arcSubdivisionNum: number = 50): Point[] => {
+export const getArcPoints = (edge: PolygonEdge, arcSubdivisionNum: number = 30): Point[] => {
   const { p1, p2, archHeight, isInnerArc } = edge
   const pointList: Point[] = []
   

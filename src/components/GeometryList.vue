@@ -170,7 +170,7 @@ const isPolygonInGroupSelected = (group: PolygonGroup) => {
                 <button 
                   class="action-btn"
                   :class="{ inactive: !polygon.visible }"
-                  @click.stop="polygon.visible = !polygon.visible"
+                  @click.stop="emit('toggleVisibility', polygon)"
                   :title="polygon.visible ? '隐藏' : '显示'"
                 >
                   <svg v-if="polygon.visible" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
